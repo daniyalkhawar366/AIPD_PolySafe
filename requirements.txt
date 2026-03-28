@@ -1,0 +1,8 @@
+streamlit
+pytesseract
+pdf2image
+Pillow
+requests
+pandas
+reflex
+reflex==0.8.28.post1
