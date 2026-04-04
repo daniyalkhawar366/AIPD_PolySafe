@@ -1160,14 +1160,16 @@ def delete_med(med_id: int):
 @app.get("/api/interactions/{user_id}")
 def check_interactions(user_id: str):
     meds = get_medications(user_id)
-    if len(meds) < 2:
-        return {
-            "interactions": [],
-            "report": build_safety_report(meds, []),
-            "message": "Need more meds",
-        }
+    user_profile = _default_profile()
+    if users_collection is not None:
+        try:
+            user_doc = users_collection.find_one({"_id": ObjectId(user_id)})
+            if user_doc:
+                user_profile = user_doc.get("profile") or _default_profile()
+        except Exception:
+            user_profile = _default_profile()
     
-    results = check_safety_for_profile(meds)
+    results = check_safety_for_profile(meds, user_profile)
     if results == "API_FAILED":
         fallback_alerts = check_overdose_risks(meds) + check_double_dose_and_schedule_risks(meds)
         return {
@@ -1188,14 +1190,9 @@ def check_interactions(user_id: str):
 def check_my_interactions(current_user: dict[str, Any] = Depends(get_current_user)):
     user_id = _auth_user_scope_id(current_user)
     meds = _get_mongo_medications(user_id)
-    if len(meds) < 2:
-        return {
-            "interactions": [],
-            "report": build_safety_report(meds, []),
-            "message": "Need more meds",
-        }
+    user_profile = current_user.get("profile") or _default_profile()
 
-    results = check_safety_for_profile(meds)
+    results = check_safety_for_profile(meds, user_profile)
     if results == "API_FAILED":
         fallback_alerts = check_overdose_risks(meds) + check_double_dose_and_schedule_risks(meds)
         return {

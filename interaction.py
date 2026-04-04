@@ -359,13 +359,129 @@ def check_double_dose_and_schedule_risks(medications):
     return alerts
 
 
-def check_safety_for_profile(medications):
+def _profile_allergies(profile: dict) -> list[str]:
+    raw = profile.get("allergies") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip().lower() for item in raw if str(item).strip()]
+
+
+def _profile_conditions(profile: dict) -> list[str]:
+    raw = profile.get("chronic_conditions") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip().lower() for item in raw if str(item).strip()]
+
+
+def check_profile_context_risks(medications: list[dict], profile: dict | None = None) -> list[dict]:
+    profile = profile or {}
+    alerts: list[dict] = []
+    med_names = [str(med.get("name") or "").strip() for med in medications if str(med.get("name") or "").strip()]
+    lowered_names = [name.lower() for name in med_names]
+
+    if not med_names:
+        return alerts
+
+    try:
+        age_value = int(float(profile.get("age") or 0))
+    except Exception:
+        age_value = 0
+
+    if age_value >= 65 and len(med_names) >= 2:
+        alerts.append({
+            "drug_a": med_names[0],
+            "drug_b": "Age 65+ profile context",
+            "severity": "Medium" if len(med_names) >= 4 else "Low",
+            "summary": "Age-sensitive medication review recommended for this profile.",
+            "detail": (
+                f"Profile age is {age_value}. With {len(med_names)} active medicines, sensitivity to side effects and interactions can increase. "
+                "Review dose timing and necessity with your clinician."
+            ),
+            "kind": "profile_age",
+        })
+
+    kidney_keywords = ["ibuprofen", "naproxen", "diclofenac", "aspirin", "ketorolac", "metformin", "lisinopril", "losartan"]
+    if bool(profile.get("kidney_disease")):
+        kidney_matches = [name for name in med_names if any(token in name.lower() for token in kidney_keywords)]
+        if kidney_matches:
+            alerts.append({
+                "drug_a": kidney_matches[0],
+                "drug_b": "Kidney disease profile context",
+                "severity": "High" if any("ibuprofen" in name.lower() or "naproxen" in name.lower() or "diclofenac" in name.lower() for name in kidney_matches) else "Medium",
+                "summary": "Kidney profile flag: medicine choice/dose may need renal review.",
+                "detail": (
+                    f"Profile indicates kidney disease. Relevant medicines in your list: {', '.join(kidney_matches)}. "
+                    "A renal dose/safety check is recommended before continuing unchanged."
+                ),
+                "kind": "profile_kidney",
+            })
+
+    liver_keywords = ["acetaminophen", "paracetamol", "atorvastatin", "simvastatin", "diclofenac", "aspirin"]
+    if bool(profile.get("liver_disease")):
+        liver_matches = [name for name in med_names if any(token in name.lower() for token in liver_keywords)]
+        if liver_matches:
+            alerts.append({
+                "drug_a": liver_matches[0],
+                "drug_b": "Liver disease profile context",
+                "severity": "High" if any("acetaminophen" in name.lower() or "paracetamol" in name.lower() for name in liver_matches) else "Medium",
+                "summary": "Liver profile flag: medicines may increase hepatic burden.",
+                "detail": (
+                    f"Profile indicates liver disease. Relevant medicines in your list: {', '.join(liver_matches)}. "
+                    "A liver safety review is recommended for dose and monitoring."
+                ),
+                "kind": "profile_liver",
+            })
+
+    allergies = _profile_allergies(profile)
+    for allergy in allergies:
+        if len(allergy) < 3:
+            continue
+        matched_meds = [name for name in med_names if allergy in name.lower() or name.lower() in allergy]
+        if not matched_meds:
+            # Handle common shorthand mapping in allergy entries
+            if allergy in {"asa", "aspirin"}:
+                matched_meds = [name for name in med_names if "aspirin" in name.lower()]
+        if matched_meds:
+            alerts.append({
+                "drug_a": matched_meds[0],
+                "drug_b": f"Allergy profile: {allergy}",
+                "severity": "High",
+                "summary": "Potential allergy conflict with your recorded profile.",
+                "detail": (
+                    f"Profile allergies include '{allergy}'. Matching medicine(s): {', '.join(matched_meds)}. "
+                    "Stop and verify immediately with your clinician/pharmacist if this is an active allergy."
+                ),
+                "kind": "profile_allergy",
+            })
+
+    chronic_conditions = _profile_conditions(profile)
+    has_hypertension = any("hypertension" in condition or "high blood pressure" in condition for condition in chronic_conditions)
+    if has_hypertension:
+        nsaid_matches = [name for name in med_names if any(token in name.lower() for token in ["ibuprofen", "naproxen", "diclofenac", "aspirin"])]
+        if nsaid_matches:
+            alerts.append({
+                "drug_a": nsaid_matches[0],
+                "drug_b": "Hypertension profile context",
+                "severity": "Medium",
+                "summary": "Blood-pressure profile context: NSAID use may need monitoring.",
+                "detail": (
+                    f"Profile includes hypertension and NSAID medicine(s): {', '.join(nsaid_matches)}. "
+                    "Monitor blood pressure and discuss alternatives if readings worsen."
+                ),
+                "kind": "profile_hypertension",
+            })
+
+    return alerts
+
+
+def check_safety_for_profile(medications, profile: dict | None = None):
     interaction_alerts = check_interactions_for_profile(medications)
     if interaction_alerts == "API_FAILED":
         return "API_FAILED"
     overdose_alerts = check_overdose_risks(medications)
     duplicate_and_sanity_alerts = check_double_dose_and_schedule_risks(medications)
-    return interaction_alerts + overdose_alerts + duplicate_and_sanity_alerts
+    profile_alerts = check_profile_context_risks(medications, profile)
+    return interaction_alerts + overdose_alerts + duplicate_and_sanity_alerts + profile_alerts
 
 
 def _severity_rank(severity: str) -> int:
@@ -473,6 +589,11 @@ def _build_dynamic_recommendations(alerts: list[dict]) -> list[str]:
     if kinds.get("class_overlap", 0) > 0:
         recommendations.append(
             "Same-class overlap was detected. Ask whether both medicines are intended together or if one was meant to replace the other."
+        )
+
+    if any(kind.startswith("profile_") for kind in kinds):
+        recommendations.append(
+            "Profile-linked risk factors were detected. Confirm this plan with your clinician using your age, condition, and organ-risk context."
         )
 
     if not recommendations:
