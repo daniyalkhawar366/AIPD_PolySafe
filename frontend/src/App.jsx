@@ -1,126 +1,1598 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Shield,
   Upload,
   Trash2,
-  CheckCircle,
-  AlertTriangle,
-  Plus,
-  User,
-  Activity,
-  ChevronRight,
-  Search,
-  Check
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import SafetyAnalysisView from './SafetyAnalysisDesignReference';
+import AppSidebar from './components/AppSidebar';
+import AppModals from './components/AppModals';
+import DashboardView from './views/DashboardView';
+import HistoryView from './views/HistoryView';
+import ProfileView from './views/ProfileView';
 
-const GlassCard = ({ children, className = "" }) => (
-  <div className={`bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl shadow-2xl p-6 ${className}`}>
+const appLogo = '/favicon.svg';
+
+const GlassCard = ({ children, className = '' }) => (
+  <div className={`bg-white rounded-lg shadow-sm ring-1 ring-slate-900/5 p-4 ${className}`}>
     {children}
   </div>
 );
-const API_BASE = "http://localhost:8000/api";
+
+const API_BASE = 'http://localhost:8000/api';
+const TOKEN_KEY = 'polysafe_token';
+const COOKIE_SESSION_TOKEN = '__cookie_session__';
+const CACHE_MEDS_KEY = 'polysafe_cache_meds';
+const CACHE_PRESCRIPTIONS_KEY = 'polysafe_cache_prescriptions';
+const CACHE_SAFETY_KEY = 'polysafe_cache_safety';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.REACT_APP_GOOGLE_CLIENT_ID || '';
+axios.defaults.headers.common['ngrok-skip-browser-warning'] = '69420';
+axios.defaults.withCredentials = true;
+let authInterceptorInstalled = false;
+let authResponseInterceptorInstalled = false;
+
+const setAuthHeader = (token) => {
+  if (token && token !== COOKIE_SESSION_TOKEN) {
+    axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+  } else {
+    delete axios.defaults.headers.common.Authorization;
+  }
+};
+
+const getAuthConfig = (token) => {
+  const authToken = token || localStorage.getItem(TOKEN_KEY) || '';
+  if (!authToken || authToken === COOKIE_SESSION_TOKEN) {
+    return { withCredentials: true };
+  }
+  return { withCredentials: true, headers: { Authorization: `Bearer ${authToken}` } };
+};
+
+const formatUserName = (fullName) => {
+  if (!fullName) return '';
+  const nameParts = fullName.trim().split(/\s+/);
+  if (nameParts.length === 1) return nameParts[0];
+  if (nameParts.length === 2) return fullName;
+  // For 3+ names, return middle name or last name if only 3 names
+  if (nameParts.length === 3) return nameParts[1];
+  // For more than 3 names, return last 2
+  return `${nameParts[nameParts.length - 2]} ${nameParts[nameParts.length - 1]}`;
+};
+
+const MANUAL_SOURCE_DEFAULT = 'Prescription medicine';
+const VIEW_TO_PATH = {
+  dashboard: '/dashboard',
+  safety: '/safety',
+  history: '/history',
+  profile: '/profile',
+};
+
+const PATH_TO_VIEW = {
+  '/dashboard': 'dashboard',
+  '/safety': 'safety',
+  '/history': 'history',
+  '/profile': 'profile',
+  '/': 'dashboard',
+};
+
+const getViewFromPath = (pathName = '/') => PATH_TO_VIEW[pathName] || 'dashboard';
 
 const App = () => {
-  const [userName, setUserName] = useState('');
-  const [userId, setUserId] = useState('');
+  const [authMode, setAuthMode] = useState('login');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authRole, setAuthRole] = useState('patient');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [forgotOtpSent, setForgotOtpSent] = useState(false);
+  const [forgotOtpVerified, setForgotOtpVerified] = useState(false);
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authInfo, setAuthInfo] = useState('');
+  const [minPasswordLength, setMinPasswordLength] = useState(8);
+  const [googleEnabled, setGoogleEnabled] = useState(Boolean(GOOGLE_CLIENT_ID));
+  const [googleButtonReady, setGoogleButtonReady] = useState(false);
+  const [googleUiError, setGoogleUiError] = useState('');
+  const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const googleSlotRef = useRef(null);
+  const googleRenderedRef = useRef(false);
+  const manualLogoutRef = useRef(false);
+  const hasShownProfileNudgeRef = useRef(false);
+
+  const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || '');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authHydrated, setAuthHydrated] = useState(false);
+
   const [meds, setMeds] = useState([]);
   const [interactions, setInteractions] = useState([]);
+  const [safetyReport, setSafetyReport] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [ocrResults, setOcrResults] = useState(null);
+  const [ocrReviewItems, setOcrReviewItems] = useState([]);
+  const [rawText, setRawText] = useState('');
+  const [uploadedFileName, setUploadedFileName] = useState('');
+  const [ocrConfidence, setOcrConfidence] = useState(0);
+  const [savedPrescriptions, setSavedPrescriptions] = useState([]);
+  const [manualDrugName, setManualDrugName] = useState('');
+  const [manualDrugType, setManualDrugType] = useState(MANUAL_SOURCE_DEFAULT);
+  const [manualDose, setManualDose] = useState('');
+  const [manualFrequency, setManualFrequency] = useState('');
+  const [manualError, setManualError] = useState('');
+  const [medSearch, setMedSearch] = useState('');
+  const [manualSaving, setManualSaving] = useState(false);
+  const [recordSaving, setRecordSaving] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const [activeView, setActiveView] = useState('dashboard');
-  const [expandedInter, setExpandedInter] = useState(null);
+  const [activeView, setActiveView] = useState(getViewFromPath(window.location.pathname));
+  const [offlineMode, setOfflineMode] = useState(false);
+  const [offlineInfo, setOfflineInfo] = useState('');
+  const [profileNudgeVisible, setProfileNudgeVisible] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileForm, setProfileForm] = useState({
+    age: '',
+    gender_identity: '',
+    weight_kg: '',
+    height_cm: '',
+    chronic_conditions_text: '',
+    allergies_text: '',
+    kidney_disease: false,
+    liver_disease: false,
+    privacy_consent: false,
+  });
+  const [deleteAccountText, setDeleteAccountText] = useState('');
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
+  const [updateMedLoading, setUpdateMedLoading] = useState(false);
+  const [pendingEditMed, setPendingEditMed] = useState(null);
+  const [editMedName, setEditMedName] = useState('');
+  const [editMedType, setEditMedType] = useState(MANUAL_SOURCE_DEFAULT);
+  const [editMedDose, setEditMedDose] = useState('');
+  const [editMedFrequency, setEditMedFrequency] = useState('');
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [filePreviewOpen, setFilePreviewOpen] = useState(false);
+  const [filePreviewLoading, setFilePreviewLoading] = useState(false);
+  const [filePreviewUrl, setFilePreviewUrl] = useState('');
+  const [filePreviewName, setFilePreviewName] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [prescriptionModalOpen, setPrescriptionModalOpen] = useState(false);
+  const [sessionRestorePending, setSessionRestorePending] = useState(false);
+  const [pendingDeleteRecordId, setPendingDeleteRecordId] = useState(null);
+  const [pendingDeleteMedId, setPendingDeleteMedId] = useState(null);
+  const [deleteRecordLoading, setDeleteRecordLoading] = useState(false);
+  const [deleteMedLoading, setDeleteMedLoading] = useState(false);
+  const [ocrRecordSaved, setOcrRecordSaved] = useState(false);
+  const [bulkAddLoading, setBulkAddLoading] = useState(false);
+  const [ocrActionInfo, setOcrActionInfo] = useState('');
+  const [ocrMedsAdded, setOcrMedsAdded] = useState(false);
+  const [selectedSafetyInteraction, setSelectedSafetyInteraction] = useState(null);
+  const safetyRefreshTimerRef = useRef(null);
 
-  const fetchMeds = async () => {
-    if (!userId) return;
-    const res = await axios.get(`${API_BASE}/meds/${userId}`);
-    setMeds(res.data);
+  const entranceVariants = {
+    hidden: { opacity: 0, y: 14 },
+    show: (delay = 0) => ({
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.28, ease: 'easeOut', delay },
+    }),
   };
 
-  const handleSetUser = () => {
-    if (userName.trim()) setUserId(userName.trim());
+  const loadCache = (key, fallback = null) => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      return JSON.parse(raw);
+    } catch {
+      return fallback;
+    }
+  };
+
+  const saveCache = (key, value) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // no-op: storage can fail in private mode or quota limits
+    }
+  };
+
+  const parseCsvList = (rawText) => String(rawText || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const fetchMe = async () => {
+    if (!token && !localStorage.getItem(TOKEN_KEY)) return;
+    setAuthHeader(token);
+    try {
+      const res = await axios.get(`${API_BASE}/auth/me`, getAuthConfig(token));
+      setCurrentUser(res.data.user);
+      if (res.data.token) {
+        localStorage.setItem(TOKEN_KEY, res.data.token);
+        setAuthHeader(res.data.token);
+        setToken(res.data.token);
+      }
+    } catch {
+      localStorage.removeItem(TOKEN_KEY);
+      setAuthHeader('');
+      setToken('');
+      setCurrentUser(null);
+    }
+  };
+
+  const fetchMeds = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await axios.get(`${API_BASE}/me/meds`, getAuthConfig(token));
+      setMeds(res.data);
+      saveCache(CACHE_MEDS_KEY, res.data);
+      setOfflineMode(false);
+      setOfflineInfo('');
+    } catch {
+      const cached = loadCache(CACHE_MEDS_KEY, []);
+      setMeds(Array.isArray(cached) ? cached : []);
+      setOfflineMode(true);
+      setOfflineInfo('You are offline. Showing last synced data.');
+    }
+  };
+
+  const fetchPrescriptions = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await axios.get(`${API_BASE}/me/prescriptions`, getAuthConfig(token));
+      setSavedPrescriptions(res.data);
+      saveCache(CACHE_PRESCRIPTIONS_KEY, res.data);
+      setOfflineMode(false);
+      setOfflineInfo('');
+    } catch {
+      const cached = loadCache(CACHE_PRESCRIPTIONS_KEY, []);
+      setSavedPrescriptions(Array.isArray(cached) ? cached : []);
+      setOfflineMode(true);
+      setOfflineInfo('You are offline. Showing last synced data.');
+    }
+  };
+
+  const filteredMeds = meds.filter((med) => med.name.toLowerCase().includes(medSearch.trim().toLowerCase()));
+  const profileRequired = Boolean(currentUser) && !Boolean(currentUser.profile_completed);
+  const navigateToView = (view, options = {}) => {
+    const nextView = VIEW_TO_PATH[view] ? view : 'dashboard';
+    const targetPath = VIEW_TO_PATH[nextView];
+    const method = options.replace ? 'replaceState' : 'pushState';
+    setActiveView(nextView);
+    if (window.location.pathname !== targetPath) {
+      window.history[method]({}, '', targetPath);
+    }
+  };
+
+  const requireProfileOrOpen = () => {
+    if (!profileRequired) return false;
+    navigateToView('profile');
+    setProfileError('Please complete your profile to continue.');
+    return true;
+  };
+
+  const renderHighlightedText = (text, query) => {
+    const source = String(text || '');
+    const needle = String(query || '').trim();
+    if (!needle) return source;
+
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escaped})`, 'ig');
+    const parts = source.split(regex);
+    return parts.map((part, index) => {
+      if (part.toLowerCase() === needle.toLowerCase()) {
+        return (
+          <mark key={`${part}-${index}`} className="bg-amber-200 text-slate-900 rounded px-0.5">
+            {part}
+          </mark>
+        );
+      }
+      return <span key={`${part}-${index}`}>{part}</span>;
+    });
+  };
+
+  const getMedicationRiskTag = (medName) => {
+    const target = String(medName || '').trim().toLowerCase();
+    if (!target) return null;
+
+    const severityRank = { High: 0, Medium: 1, Low: 2 };
+
+    const related = interactions.filter((inter) => {
+      const drugA = String(inter?.drug_a || '').toLowerCase();
+      const drugB = String(inter?.drug_b || '').toLowerCase();
+      return drugA.includes(target) || drugB.includes(target) || target.includes(drugA) || target.includes(drugB);
+    }).sort((left, right) => (severityRank[left.severity] ?? 9) - (severityRank[right.severity] ?? 9));
+
+    if (related.length === 0) return null;
+    const hasHigh = related.some((inter) => inter.severity === 'High');
+    if (hasHigh) {
+      return {
+        label: 'High risk',
+        className: 'bg-red-100 text-red-700 border-red-200',
+        interaction: related[0],
+      };
+    }
+    return {
+      label: 'Risk',
+      className: 'bg-amber-100 text-amber-700 border-amber-200',
+      interaction: related[0],
+    };
+  };
+
+  const openSafetyForInteraction = (interaction) => {
+    if (!interaction) return;
+    setSelectedSafetyInteraction(interaction);
+    navigateToView('safety');
+  };
+
+  const formatPrescriptionDate = (rawDate) => {
+    if (!rawDate) return '';
+    const parsed = new Date(rawDate);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const formatMedicationSource = (source) => {
+    const normalized = (source || '').toLowerCase();
+    if (!normalized || normalized.includes('prescription')) return 'Prescription';
+    if (normalized.includes('ocr')) return 'Prescription';
+    if (normalized.includes('over-the-counter') || normalized === 'otc') return 'Over-the-counter';
+    if (normalized.includes('supplement') || normalized.includes('vitamin')) return 'Supplement';
+    return source;
+  };
+
+  const closeOcrReviewModal = () => {
+    setOcrResults(null);
+    setOcrReviewItems([]);
+    setOcrActionInfo('');
+    setOcrRecordSaved(false);
+    setOcrMedsAdded(false);
+  };
+
+  const formatRiskBadge = (inter) => {
+    if (inter.kind === 'overdose') return `${inter.severity} Overdose Risk`;
+    if (inter.kind === 'duplicate_ingredient') return `${inter.severity} Double-Dose Risk`;
+    if (inter.kind === 'duplicate_schedule') return `${inter.severity} Schedule Overlap`;
+    if (inter.kind === 'class_overlap') return `${inter.severity} Same-Class Overlap`;
+    if (inter.kind === 'dose_sanity') return `${inter.severity} Dose Sanity Alert`;
+    return `${inter.severity} Risk`;
   };
 
   useEffect(() => {
-    if (userId) fetchMeds();
-  }, [userId]);
+    setAuthHeader(token);
 
-  const handleUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !userId) return;
+    if (manualLogoutRef.current && !token && !localStorage.getItem(TOKEN_KEY)) {
+      setCurrentUser(null);
+      setSessionRestorePending(false);
+      setAuthHydrated(true);
+      return;
+    }
 
+    const hydrateAuth = async () => {
+      const persistedToken = token || localStorage.getItem(TOKEN_KEY) || '';
+
+      try {
+        setSessionRestorePending(true);
+        const res = await axios.get(`${API_BASE}/auth/me`, getAuthConfig(persistedToken));
+        setCurrentUser(res.data.user);
+        if (res.data.token) {
+          localStorage.setItem(TOKEN_KEY, res.data.token);
+          setAuthHeader(res.data.token);
+          setToken(res.data.token);
+        } else if (!persistedToken) {
+          setToken(COOKIE_SESSION_TOKEN);
+        }
+        manualLogoutRef.current = false;
+      } catch (err) {
+        const shouldClearSession = err?.response?.status === 401 || err?.response?.status === 403;
+        if (shouldClearSession) {
+          localStorage.removeItem(TOKEN_KEY);
+          setAuthHeader('');
+          setToken('');
+          setCurrentUser(null);
+        }
+      } finally {
+        setSessionRestorePending(false);
+        setAuthHydrated(true);
+      }
+    };
+
+    setAuthHydrated(false);
+    hydrateAuth();
+  }, [token]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveView(getViewFromPath(window.location.pathname));
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    const initialView = getViewFromPath(window.location.pathname);
+    const canonicalPath = VIEW_TO_PATH[initialView] || VIEW_TO_PATH.dashboard;
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState({}, '', canonicalPath);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (authInterceptorInstalled) return;
+    axios.interceptors.request.use((config) => {
+      const persistedToken = localStorage.getItem(TOKEN_KEY);
+      if (persistedToken && persistedToken !== COOKIE_SESSION_TOKEN) {
+        config.headers = config.headers || {};
+        config.headers.Authorization = config.headers.Authorization || `Bearer ${persistedToken}`;
+      }
+      config.withCredentials = true;
+      return config;
+    });
+    authInterceptorInstalled = true;
+  }, []);
+
+  useEffect(() => {
+    if (authResponseInterceptorInstalled) return;
+
+    axios.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const originalRequest = error?.config;
+        const status = error?.response?.status;
+        const requestUrl = String(originalRequest?.url || '');
+        const isAuthEndpoint = /\/api\/auth\/(me|login|register|forgot-password|verify-reset|reset-password|google|logout)/.test(requestUrl);
+
+        // Attempt one silent refresh before forcing logout.
+        if (
+          status === 401
+          && originalRequest
+          && !originalRequest._retry
+          && !originalRequest._skipAuthRefresh
+          && !isAuthEndpoint
+        ) {
+          originalRequest._retry = true;
+          try {
+            const res = await axios.get(`${API_BASE}/auth/me`, { withCredentials: true, _skipAuthRefresh: true });
+            const refreshedToken = res?.data?.token;
+            if (refreshedToken) {
+              localStorage.setItem(TOKEN_KEY, refreshedToken);
+              setAuthHeader(refreshedToken);
+              setToken(refreshedToken);
+              originalRequest.headers = originalRequest.headers || {};
+              originalRequest.headers.Authorization = `Bearer ${refreshedToken}`;
+              return axios(originalRequest);
+            }
+          } catch {
+            localStorage.removeItem(TOKEN_KEY);
+            setAuthHeader('');
+            setToken('');
+            setCurrentUser(null);
+          }
+        }
+
+        return Promise.reject(error);
+      }
+    );
+
+    authResponseInterceptorInstalled = true;
+  }, []);
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchMeds();
+      fetchPrescriptions();
+      const existingProfile = currentUser.profile || {};
+      setProfileForm((prev) => ({
+        ...prev,
+        age: existingProfile.age ? String(existingProfile.age) : '',
+        gender_identity: existingProfile.gender_identity || '',
+        weight_kg: existingProfile.weight_kg ? String(existingProfile.weight_kg) : '',
+        height_cm: existingProfile.height_cm ? String(existingProfile.height_cm) : '',
+        chronic_conditions_text: (existingProfile.chronic_conditions || []).join(', '),
+        allergies_text: (existingProfile.allergies || []).join(', '),
+        kidney_disease: Boolean(existingProfile.kidney_disease),
+        liver_disease: Boolean(existingProfile.liver_disease),
+        privacy_consent: Boolean(currentUser.privacy_consent),
+      }));
+      if (activeView === 'profile' && currentUser.profile_completed) {
+        setProfileError('');
+      }
+    }
+  }, [currentUser, activeView]);
+
+  useEffect(() => {
+    if (!authHydrated || !currentUser) return;
+
+    if (currentUser.profile_completed) {
+      setProfileNudgeVisible(false);
+      hasShownProfileNudgeRef.current = true;
+      return;
+    }
+
+    if (
+      activeView === 'dashboard'
+      && !hasShownProfileNudgeRef.current
+    ) {
+      setProfileNudgeVisible(true);
+      hasShownProfileNudgeRef.current = true;
+    }
+
+    if (activeView === 'profile') {
+      setProfileNudgeVisible(false);
+    }
+  }, [activeView, authHydrated, currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || !authHydrated) return;
+    if (meds.length < 2) {
+      setInteractions([]);
+      setSafetyReport(null);
+      return;
+    }
+
+    // Rebuild safety data after app refresh/login so profile risk badges persist.
+    scheduleSafetyRefresh();
+  }, [currentUser, authHydrated, meds.length]);
+
+  useEffect(() => {
+    if (currentUser || !authHydrated) return;
+    const retryTimer = setTimeout(() => {
+      fetchMe();
+    }, 1500);
+    return () => clearTimeout(retryTimer);
+  }, [token, currentUser, authHydrated]);
+
+  useEffect(() => {
+    const fetchAuthMeta = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/auth/meta`);
+        setMinPasswordLength(res.data.min_password_length || 8);
+        setGoogleEnabled(Boolean(res.data.google_enabled) && Boolean(GOOGLE_CLIENT_ID));
+      } catch {
+        setMinPasswordLength(8);
+      }
+    };
+    fetchAuthMeta();
+  }, []);
+
+  useEffect(() => {
+    if (token || !googleEnabled || !GOOGLE_CLIENT_ID || authMode === 'forgot') {
+      setGoogleButtonReady(false);
+      setGoogleUiError('');
+      googleRenderedRef.current = false;
+      return;
+    }
+
+    let cancelled = false;
+    setGoogleButtonReady(false);
+    setGoogleUiError('');
+
+    const loadingTimeout = setTimeout(() => {
+      if (!cancelled && !googleRenderedRef.current) {
+        setGoogleUiError('Google button could not load. Check OAuth Authorized JavaScript origins.');
+      }
+    }, 6000);
+
+    const mountGoogleButton = () => {
+      if (cancelled) return false;
+      const target = googleSlotRef.current;
+      if (!target || !window.google?.accounts?.id) return false;
+
+      try {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: async (response) => {
+            setGoogleAuthLoading(true);
+            setAuthLoading(true);
+            setAuthError('');
+            setAuthInfo('');
+            try {
+              const res = await axios.post(`${API_BASE}/auth/google`, { idToken: response.credential });
+              localStorage.setItem(TOKEN_KEY, res.data.token);
+              setAuthHeader(res.data.token);
+              setToken(res.data.token);
+              setCurrentUser(res.data.user);
+              setAuthHydrated(true);
+            } catch (err) {
+              setAuthError(err.response?.data?.detail || 'Google sign-in failed');
+            } finally {
+              setGoogleAuthLoading(false);
+              setAuthLoading(false);
+            }
+          },
+        });
+
+        target.innerHTML = '';
+        window.google.accounts.id.renderButton(target, {
+          theme: 'outline',
+          size: 'large',
+          text: 'signin_with',
+          shape: 'pill',
+          width: 340,
+        });
+        googleRenderedRef.current = true;
+        setGoogleButtonReady(true);
+        setGoogleUiError('');
+        return true;
+      } catch (e) {
+        googleRenderedRef.current = false;
+        setGoogleButtonReady(false);
+        setGoogleUiError('Google sign-in failed to render. Verify your client ID and browser origin.');
+        return false;
+      }
+    };
+
+    const retryMountGoogleButton = (attempt = 0) => {
+      if (cancelled) return;
+      if (mountGoogleButton()) return;
+      if (attempt < 20) {
+        window.requestAnimationFrame(() => retryMountGoogleButton(attempt + 1));
+      }
+    };
+
+    const existing = document.getElementById('google-identity-script');
+    if (existing) {
+      retryMountGoogleButton();
+      return () => {
+        cancelled = true;
+        clearTimeout(loadingTimeout);
+      };
+    }
+
+    const script = document.createElement('script');
+    script.id = 'google-identity-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      if (!cancelled) retryMountGoogleButton();
+    };
+    script.onerror = () => {
+      if (!cancelled) {
+        setGoogleUiError('Failed to load Google script. Check internet connection or browser extensions.');
+      }
+    };
+    document.body.appendChild(script);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(loadingTimeout);
+    };
+  }, [token, googleEnabled, authMode]);
+
+  const clearAuthMessages = () => {
+    setAuthError('');
+    setAuthInfo('');
+  };
+
+  const switchAuthMode = (mode) => {
+    setAuthMode(mode);
+    clearAuthMessages();
+    setAuthPassword('');
+    setConfirmPassword('');
+    setConfirmNewPassword('');
+    setResetCode('');
+    setNewPassword('');
+    setForgotOtpSent(false);
+    setForgotOtpVerified(false);
+    setShowAuthPassword(false);
+    setAuthRole('patient');
+  };
+
+  const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  
+  const validatePassword = (password, minLength) => {
+    if (!password || password.length < minLength) return false;
+    return true;
+  };
+
+  const validateDrugName = (name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return { valid: false, error: 'Drug name is required.' };
+    if (trimmed.length > 200) return { valid: false, error: 'Drug name must be 200 characters or less.' };
+    return { valid: true };
+  };
+
+  const validateDose = (dose) => {
+    const trimmed = (dose || '').trim();
+    if (!trimmed) return { valid: true }; // Optional field
+    if (trimmed.length > 100) return { valid: false, error: 'Dose must be 100 characters or less.' };
+    return { valid: true };
+  };
+
+  const validateFrequency = (frequency) => {
+    const trimmed = (frequency || '').trim();
+    if (!trimmed) return { valid: true }; // Optional field
+    if (trimmed.length > 100) return { valid: false, error: 'Frequency must be 100 characters or less.' };
+    return { valid: true };
+  };
+
+  const validateFile = (file) => {
+    if (!file) return { valid: false, error: 'Please select a file.' };
+    
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'];
+    if (!validTypes.includes(file.type)) {
+      return { valid: false, error: 'Only PNG, JPG, and PDF files are allowed.' };
+    }
+    
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      return { valid: false, error: 'File size must be 10MB or less.' };
+    }
+    
+    return { valid: true };
+  };
+
+  const handleAuthSubmit = async () => {
+    clearAuthMessages();
+
+    const email = authEmail.trim().toLowerCase();
+    if (!email) {
+      setAuthError('Email is required.');
+      return;
+    }
+    if (!validateEmail(email)) {
+      setAuthError('Please enter a valid email address.');
+      return;
+    }
+
+    if (
+      !email ||
+      (authMode !== 'forgot' && !authPassword.trim()) ||
+      (authMode === 'register' && !authName.trim())
+    ) {
+      setAuthError('Please fill all required fields.');
+      return;
+    }
+
+    if (authMode !== 'forgot' && authPassword.length < minPasswordLength) {
+      setAuthError(`Password must be at least ${minPasswordLength} characters.`);
+      return;
+    }
+
+    if (authMode === 'register' && authPassword !== confirmPassword) {
+      setAuthError('Password and confirm password do not match.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      if (authMode === 'forgot') {
+        await axios.post(`${API_BASE}/auth/forgot-password`, { email });
+        setAuthInfo('If this email exists, OTP has been sent. Enter it below to reset your password.');
+        setForgotOtpSent(true);
+        setForgotOtpVerified(false);
+      } else {
+        const url = authMode === 'register' ? `${API_BASE}/auth/register` : `${API_BASE}/auth/login`;
+        const payload = authMode === 'register'
+          ? { name: authName.trim(), email, password: authPassword, role: authRole }
+          : { email, password: authPassword };
+
+        const res = await axios.post(url, payload);
+        localStorage.setItem(TOKEN_KEY, res.data.token);
+        setAuthHeader(res.data.token);
+        setToken(res.data.token);
+        setCurrentUser(res.data.user);
+        setAuthHydrated(true);
+        setAuthPassword('');
+        setConfirmPassword('');
+      }
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.response?.data?.message || 'Authentication failed';
+      if (authMode === 'login' && msg.toLowerCase().includes('invalid email or password')) {
+        setAuthError('Invalid email or password. Use Forgot Password to reset access.');
+      } else {
+        setAuthError(msg);
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    clearAuthMessages();
+    if (!authEmail.trim() || !resetCode.trim()) return;
+    setAuthLoading(true);
+    try {
+      await axios.post(`${API_BASE}/auth/verify-reset`, {
+        email: authEmail.trim(),
+        code: resetCode.trim(),
+      });
+      setAuthInfo('OTP verified. You can now set a new password.');
+      setForgotOtpVerified(true);
+      setForgotOtpSent(false);
+      setAuthError('');
+    } catch (err) {
+      setAuthError(err.response?.data?.detail || 'OTP verification failed');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    clearAuthMessages();
+    if (!authEmail.trim() || !resetCode.trim() || !newPassword.trim() || !confirmNewPassword.trim()) return;
+    if (newPassword.length < minPasswordLength) {
+      setAuthError(`New password must be at least ${minPasswordLength} characters.`);
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setAuthError('New password and confirm password do not match.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      await axios.post(`${API_BASE}/auth/reset-password`, {
+        email: authEmail.trim(),
+        code: resetCode.trim(),
+        new_password: newPassword,
+      });
+      switchAuthMode('login');
+      setAuthInfo('Password reset successful. Please sign in.');
+      setAuthPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setResetCode('');
+    } catch (err) {
+      setAuthError(err.response?.data?.detail || 'Password reset failed');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const submitProfile = async () => {
+    setProfileError('');
+    setProfileSaving(true);
+    try {
+      const payload = {
+        age: Number(profileForm.age || 0),
+        gender_identity: profileForm.gender_identity,
+        weight_kg: Number(profileForm.weight_kg || 0),
+        height_cm: Number(profileForm.height_cm || 0),
+        chronic_conditions: parseCsvList(profileForm.chronic_conditions_text),
+        allergies: parseCsvList(profileForm.allergies_text),
+        kidney_disease: Boolean(profileForm.kidney_disease),
+        liver_disease: Boolean(profileForm.liver_disease),
+        privacy_consent: Boolean(profileForm.privacy_consent),
+      };
+
+      const res = await axios.put(`${API_BASE}/me/profile`, payload, getAuthConfig());
+      setCurrentUser(res.data.user);
+      setProfileError('');
+      navigateToView('dashboard');
+    } catch (err) {
+      setProfileError(err.response?.data?.detail || 'Could not save profile.');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const deleteMyAccount = async (confirmEmail = '') => {
+    setDeleteAccountLoading(true);
+    try {
+      await axios.delete(`${API_BASE}/me/privacy/delete-account`, {
+        ...getAuthConfig(),
+        data: {
+          confirm_text: deleteAccountText,
+          confirm_email: confirmEmail,
+        },
+      });
+      handleLogout();
+      setDeleteAccountText('');
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Could not delete account.');
+    } finally {
+      setDeleteAccountLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    manualLogoutRef.current = true;
+    axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true }).catch(() => {});
+    localStorage.removeItem(TOKEN_KEY);
+    setAuthHeader('');
+    setToken('');
+    setCurrentUser(null);
+    setAuthHydrated(true);
+    setMeds([]);
+    setInteractions([]);
+    setSafetyReport(null);
+    setSavedPrescriptions([]);
+    setOcrResults(null);
+    setOcrReviewItems([]);
+    setMedSearch('');
+    setManualDrugType(MANUAL_SOURCE_DEFAULT);
+    setManualDose('');
+    setManualFrequency('');
+    setManualError('');
+    setUploadedFileName('');
+    setRawText('');
+    setOcrRecordSaved(false);
+    setOcrMedsAdded(false);
+    setOcrActionInfo('');
+    setSelectedSafetyInteraction(null);
+    setOfflineMode(false);
+    setOfflineInfo('');
+    setProfileError('');
+    setPendingEditMed(null);
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
+    setFilePreviewOpen(false);
+    setFilePreviewLoading(false);
+    setFilePreviewUrl('');
+    setFilePreviewName('');
+    navigateToView('dashboard', { replace: true });
+    setPrescriptionModalOpen(false);
+    setSidebarOpen(true);
+  };
+
+  const uploadFile = async (file) => {
+    if (requireProfileOrOpen()) return;
+    if (!file || !token) {
+      setManualError('No file selected. Please try again.');
+      return;
+    }
+    
+    // Validate file
+    const fileValidation = validateFile(file);
+    if (!fileValidation.valid) {
+      setManualError(fileValidation.error);
+      return;
+    }
+    
     setIsUploading(true);
+    setManualError('');
     const formData = new FormData();
     formData.append('file', file);
 
     try {
-      const res = await axios.post(`${API_BASE}/upload?user_id=${userId}`, formData);
-      setOcrResults(res.data.drugs);
+      const res = await axios.post(`${API_BASE}/me/upload`, formData);
+      const results = res.data.drugs || [];
+      setOcrResults(results);
+      setOcrReviewItems(results.map((drug) => ({
+        ...drug,
+        draftName: drug.name,
+        draftDose: drug.dose || '',
+        draftFrequency: drug.frequency || '',
+        include: true,
+      })));
+      setRawText(res.data.raw_text || '');
+      setUploadedFileName(res.data.uploaded_file_name || '');
+      setOcrConfidence(res.data.confidence || 0);
+      setOcrRecordSaved(false);
+      setOcrMedsAdded(false);
+      setOcrActionInfo('');
     } catch (err) {
-      alert("Upload failed. Check backend.");
+      setManualError(err.response?.data?.detail || err.response?.data?.message || 'Upload failed. Please check the file and try again.');
     } finally {
       setIsUploading(false);
     }
   };
 
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    await uploadFile(file);
+  };
+
+  const handleDropUpload = async (e) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    await uploadFile(file);
+  };
+
+  const updateReviewedDrug = (index, key, value) => {
+    setOcrReviewItems((previous) => previous.map((item, itemIndex) => (
+      itemIndex === index ? { ...item, [key]: value } : item
+    )));
+  };
+
   const confirmDrug = async (drug) => {
-    await axios.post(`${API_BASE}/add`, {
-      user_id: userId,
-      drug_name: drug.name,
-      rxcui: drug.rxcui
-    });
-    setOcrResults(prev => prev.filter(d => d.name !== drug.name));
-    fetchMeds();
+    const drugNameValidation = validateDrugName(drug.draftName || drug.name || '');
+    if (!drugNameValidation.valid) {
+      setManualError(drugNameValidation.error);
+      return;
+    }
+    
+    const doseValidation = validateDose(drug.draftDose || '');
+    if (!doseValidation.valid) {
+      setManualError(doseValidation.error);
+      return;
+    }
+    
+    const frequencyValidation = validateFrequency(drug.draftFrequency || '');
+    if (!frequencyValidation.valid) {
+      setManualError(frequencyValidation.error);
+      return;
+    }
+
+    try {
+      const drugName = (drug.draftName || drug.name || '').trim();
+      await axios.post(`${API_BASE}/me/add`, {
+        drug_name: drugName,
+        rxcui: drug.rxcui || 'N/A',
+        dose: (drug.draftDose || '').trim(),
+        frequency: (drug.draftFrequency || '').trim(),
+        source: 'Prescription medicine',
+        prescription_file_name: uploadedFileName,
+      }, getAuthConfig());
+      setOcrResults((prev) => prev.filter((d) => d.name !== drug.name));
+      setOcrReviewItems((prev) => prev.filter((d) => d.name !== drug.name));
+      setManualError('');
+      await fetchMeds();
+      scheduleSafetyRefresh();
+    } catch (err) {
+      if (err.response?.status === 401) {
+        handleLogout();
+        setAuthError('Session expired. Please sign in again.');
+        return;
+      }
+      setManualError(err.response?.data?.detail || err.response?.data?.message || 'Failed to add medication from OCR.');
+    }
+  };
+
+  const confirmAllReviewedDrugs = async () => {
+    const candidates = ocrReviewItems.filter((drug) => drug.include && (drug.draftName || '').trim());
+    if (candidates.length === 0) return;
+    setBulkAddLoading(true);
+    setOcrActionInfo('');
+    try {
+      for (const drug of candidates) {
+        // eslint-disable-next-line no-await-in-loop
+        await confirmDrug(drug);
+      }
+      setOcrMedsAdded(true);
+      setOcrActionInfo('All listed medicines were added to your profile. You can still save this prescription record.');
+      scheduleSafetyRefresh();
+      if (ocrRecordSaved) {
+        closeOcrReviewModal();
+      }
+    } finally {
+      setBulkAddLoading(false);
+    }
+  };
+
+  const handleManualAdd = async () => {
+    if (requireProfileOrOpen()) {
+      setManualError('Complete your profile before adding medicines.');
+      return;
+    }
+    setManualError('');
+    
+    // Check for duplicate medication (case-insensitive)
+    const normalizedInput = manualDrugName.trim().toLowerCase();
+    const duplicateExists = meds.some(med => med.name.toLowerCase() === normalizedInput);
+    if (duplicateExists) {
+      setManualError(`${manualDrugName.trim()} is already in your medication profile. Edit or delete the existing entry if you need to update it.`);
+      return;
+    }
+    
+    // Validate drug name
+    const drugNameValidation = validateDrugName(manualDrugName);
+    if (!drugNameValidation.valid) {
+      setManualError(drugNameValidation.error);
+      return;
+    }
+    
+    // Validate dose if provided
+    const doseValidation = validateDose(manualDose);
+    if (!doseValidation.valid) {
+      setManualError(doseValidation.error);
+      return;
+    }
+    
+    // Validate frequency if provided
+    const frequencyValidation = validateFrequency(manualFrequency);
+    if (!frequencyValidation.valid) {
+      setManualError(frequencyValidation.error);
+      return;
+    }
+
+    setManualSaving(true);
+    try {
+      await axios.post(`${API_BASE}/me/add`, {
+        drug_name: manualDrugName.trim(),
+        rxcui: 'N/A',
+        source: manualDrugType,
+        dose: manualDose.trim(),
+        frequency: manualFrequency.trim(),
+      }, getAuthConfig());
+      setManualDrugName('');
+      setManualDose('');
+      setManualFrequency('');
+      setManualError('');
+      await fetchMeds();
+      scheduleSafetyRefresh();
+    } catch (err) {
+      if (err.response?.status === 401) {
+        handleLogout();
+        setAuthError('Session expired. Please sign in again.');
+        return;
+      }
+      setManualError(err.response?.data?.detail || err.response?.data?.message || 'Failed to add medication. Please try again.');
+    } finally {
+      setManualSaving(false);
+    }
   };
 
   const deleteMed = async (id) => {
-    await axios.delete(`${API_BASE}/meds/${id}`);
-    fetchMeds();
+    if (!id) return;
+    setPendingDeleteMedId(id);
+  };
+
+  const openEditMed = (med) => {
+    if (!med) return;
+    setPendingEditMed(med);
+    setEditMedName(med.name || '');
+    setEditMedType(med.source || MANUAL_SOURCE_DEFAULT);
+    setEditMedDose(med.dose || '');
+    setEditMedFrequency(med.frequency || '');
+  };
+
+  const submitEditMed = async () => {
+    if (!pendingEditMed?.id) return;
+    if (!editMedName.trim()) {
+      setManualError('Medicine name is required.');
+      return;
+    }
+
+    try {
+      setUpdateMedLoading(true);
+      await axios.put(
+        `${API_BASE}/me/meds/${pendingEditMed.id}`,
+        {
+          drug_name: editMedName.trim(),
+          source: editMedType,
+          dose: editMedDose.trim(),
+          frequency: editMedFrequency.trim(),
+        },
+        getAuthConfig()
+      );
+      setPendingEditMed(null);
+      await fetchMeds();
+      scheduleSafetyRefresh();
+    } catch (err) {
+      setManualError(err.response?.data?.detail || 'Could not update this medicine.');
+    } finally {
+      setUpdateMedLoading(false);
+    }
+  };
+
+  const confirmDeleteMed = async (medId) => {
+    if (!medId) return;
+    try {
+      setDeleteMedLoading(true);
+      await axios.delete(`${API_BASE}/me/meds/${medId}`, getAuthConfig());
+      await fetchMeds();
+      setPendingDeleteMedId(null);
+      scheduleSafetyRefresh();
+    } catch (err) {
+      if (err.response?.status === 401) {
+        handleLogout();
+        setAuthError('Session expired. Please sign in again.');
+        return;
+      }
+      alert(err.response?.data?.detail || 'Could not delete this medicine.');
+    } finally {
+      setDeleteMedLoading(false);
+    }
   };
 
   const checkSafety = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`${API_BASE}/interactions/${userId}`);
-      setInteractions(res.data.interactions);
-      if (res.data.interactions.length > 0) setActiveView('safety');
+      const res = await axios.get(`${API_BASE}/me/interactions`, getAuthConfig());
+      setInteractions(res.data.interactions || []);
+      setSafetyReport(res.data.report || null);
+      saveCache(CACHE_SAFETY_KEY, {
+        interactions: res.data.interactions || [],
+        report: res.data.report || null,
+      });
+      if (res.data.degraded_mode) {
+        setOfflineInfo('Clinical API timed out. Showing local safety checks only.');
+      } else {
+        setOfflineInfo('');
+      }
+      setOfflineMode(Boolean(res.data.degraded_mode));
+    } catch (err) {
+      if (err.response?.status === 401) {
+        handleLogout();
+        setAuthError('Session expired. Please sign in again.');
+        return;
+      }
+      const cached = loadCache(CACHE_SAFETY_KEY, { interactions: [], report: null });
+      setInteractions(cached?.interactions || []);
+      setSafetyReport(cached?.report || null);
+      setOfflineMode(true);
+      setOfflineInfo('Safety service unavailable. Showing last synced safety report.');
+      setManualError(err.response?.data?.detail || 'Failed to check safety.');
     } finally {
       setLoading(false);
     }
   };
 
+  const scheduleSafetyRefresh = () => {
+    if (safetyRefreshTimerRef.current) {
+      clearTimeout(safetyRefreshTimerRef.current);
+    }
+    safetyRefreshTimerRef.current = setTimeout(() => {
+      checkSafety();
+    }, 250);
+  };
 
-  if (!userId) {
+  const savePrescriptionRecord = async () => {
+    if (!rawText.trim()) return;
+    setRecordSaving(true);
+    try {
+      await axios.post(`${API_BASE}/me/prescriptions`, {
+        raw_text: rawText,
+        confidence: ocrConfidence,
+        uploaded_file_name: uploadedFileName,
+      }, getAuthConfig());
+      await fetchPrescriptions();
+      setOcrRecordSaved(true);
+      setOcrActionInfo('Prescription saved to history. You can still add medicines from this review.');
+      if (ocrMedsAdded) {
+        closeOcrReviewModal();
+      }
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Could not save this prescription record.');
+    } finally {
+      setRecordSaving(false);
+    }
+  };
+
+  const openPrescriptionFile = async (recordId) => {
+    if (!recordId) return;
+    try {
+      setFilePreviewLoading(true);
+      const res = await axios.get(`${API_BASE}/me/prescriptions/${recordId}/file`, {
+        ...getAuthConfig(),
+        responseType: 'blob',
+      });
+      const blobUrl = URL.createObjectURL(res.data);
+      if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
+      setFilePreviewUrl(blobUrl);
+      const record = savedPrescriptions.find((item) => item.id === recordId);
+      setFilePreviewName(record?.uploaded_file_name || 'Uploaded file');
+      setFilePreviewOpen(true);
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Could not open uploaded file.');
+    } finally {
+      setFilePreviewLoading(false);
+    }
+  };
+
+  const deletePrescriptionRecord = async (recordId) => {
+    if (!recordId) return;
+    try {
+      setDeleteRecordLoading(true);
+      await axios.delete(`${API_BASE}/me/prescriptions/${recordId}`, getAuthConfig());
+      await fetchPrescriptions();
+      await fetchMeds();
+      scheduleSafetyRefresh();
+      setPendingDeleteRecordId(null);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        setSavedPrescriptions((prev) => prev.filter((record) => record.id !== recordId));
+        setPendingDeleteRecordId(null);
+        await fetchMeds();
+        scheduleSafetyRefresh();
+        return;
+      }
+      alert(err.response?.data?.detail || 'Could not delete this record.');
+    } finally {
+      setDeleteRecordLoading(false);
+    }
+  };
+
+  if (!authHydrated) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md"
-        >
-          <GlassCard className="text-center">
-            <Shield className="w-16 h-16 text-indigo-400 mx-auto mb-6" />
-            <h1 className="text-3xl font-bold text-white mb-2">PolySafe</h1>
-            <p className="text-indigo-200/60 mb-8 font-light italic">Your Personalized Drug Safety Shield</p>
-            <div className="relative group">
-              <input
-                type="text"
-                placeholder="Enter Patient ID/Name"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-5 py-4 text-white outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-center placeholder:text-gray-500"
-                value={userName}
-                onChange={(e) => setUserName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSetUser()}
-              />
+      <div className="min-h-screen flex items-center justify-center p-4 bg-transparent">
+        <GlassCard className="text-center py-8 px-10">
+          <div className="w-10 h-10 mx-auto rounded-full border-2 border-indigo-200 border-t-indigo-600 animate-spin" />
+          <p className="mt-4 text-sm text-slate-500">Restoring your session...</p>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  if (token && !currentUser && sessionRestorePending) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-transparent">
+        <GlassCard className="text-center py-8 px-10">
+          <div className="w-10 h-10 mx-auto rounded-full border-2 border-indigo-200 border-t-indigo-600 animate-spin" />
+          <p className="mt-4 text-sm text-slate-500">Reconnecting your secure session...</p>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  if (token && !currentUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-transparent">
+        <GlassCard className="text-center py-8 px-10">
+          <div className="w-10 h-10 mx-auto rounded-full border-2 border-indigo-200 border-t-indigo-600 animate-spin" />
+          <p className="mt-4 text-sm text-slate-500">Restoring your session...</p>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  if (!token || !currentUser) {
+    return (
+      <div className="min-h-screen overflow-y-auto flex items-start sm:items-center justify-center px-4 py-8 bg-transparent">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
+            <GlassCard className="relative text-center py-6 sm:py-7">
+              {googleAuthLoading && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-white/85 backdrop-blur-[2px]"
+                >
+                  <div className="flex flex-col items-center gap-3 px-6">
+                    <div className="h-10 w-10 rounded-full border-2 border-indigo-200 border-t-indigo-600 animate-spin" />
+                    <div className="text-center">
+                      <p className="text-sm font-semibold text-slate-900">Signing you in with Google</p>
+                      <p className="text-xs text-slate-500 mt-1">Finishing secure session setup...</p>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            <img src={appLogo} alt="PolySafe logo" className="w-14 h-14 mx-auto mb-3 rounded-xl object-cover shadow-sm" />
+            <h1 className="text-2xl font-bold text-slate-900 mb-1">PolySafe</h1>
+            <p className="text-slate-500 mb-4 text-sm font-light italic">Secure Medication Safety Platform</p>
+
+            <div className="grid grid-cols-2 gap-2 mb-5">
               <button
-                onClick={handleSetUser}
-                className="mt-6 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)]"
+                onClick={() => switchAuthMode('login')}
+                className={`rounded-lg py-2 text-sm font-semibold border transition-all ${authMode === 'login' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
               >
-                Access Dashboard
+                Login
+              </button>
+              <button
+                onClick={() => switchAuthMode('register')}
+                className={`rounded-lg py-2 text-sm font-semibold border transition-all ${authMode === 'register' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+              >
+                Sign Up
               </button>
             </div>
+
+            {authError && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2 mb-3 text-left">{authError}</p>}
+            {authInfo && <p className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2 mb-3 text-left">{authInfo}</p>}
+
+            {authMode === 'register' && (
+              <div className="mb-3 text-left">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  placeholder="Enter your full name"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 text-slate-900 outline-none"
+                  value={authName}
+                  onChange={(e) => setAuthName(e.target.value)}
+                />
+              </div>
+            )}
+
+            {authMode === 'register' && (
+              <div className="mb-3 text-left">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Role</label>
+                <select
+                  value={authRole}
+                  onChange={(e) => setAuthRole(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 text-slate-900 outline-none"
+                >
+                  <option value="patient">Patient</option>
+                  <option value="caregiver">Caregiver</option>
+                </select>
+              </div>
+            )}
+
+            <div className="mb-3 text-left">
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Email Address</label>
+              <input
+                type="email"
+                placeholder="name@example.com"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 text-slate-900 outline-none"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+              />
+            </div>
+
+            {authMode !== 'forgot' && (
+              <div className="mb-3 text-left">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Password</label>
+                <div className="relative">
+                  <input
+                    type={showAuthPassword ? 'text' : 'password'}
+                    placeholder="Enter password"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 pr-12 text-slate-900 outline-none"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAuthSubmit()}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthPassword((prev) => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 cursor-pointer"
+                    aria-label={showAuthPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showAuthPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Minimum {minPasswordLength} characters.</p>
+              </div>
+            )}
+
+            {authMode === 'register' && (
+              <div className="mb-3 text-left">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Confirm Password</label>
+                <div className="relative">
+                  <input
+                    type={showAuthPassword ? 'text' : 'password'}
+                    placeholder="Re-enter password"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 pr-12 text-slate-900 outline-none"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthPassword((prev) => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 cursor-pointer"
+                    aria-label={showAuthPassword ? 'Hide passwords' : 'Show passwords'}
+                  >
+                    {showAuthPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Use the same toggle to view both password fields.</p>
+              </div>
+            )}
+
+            {(authMode !== 'forgot' || !forgotOtpSent) && (
+              <button
+                onClick={handleAuthSubmit}
+                disabled={authLoading}
+                className="mt-6 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-4 rounded-xl transition-all disabled:opacity-60"
+              >
+                {authLoading ? 'Please wait...' : authMode === 'register' ? 'Create Account' : authMode === 'login' ? 'Sign In' : 'Send OTP'}
+              </button>
+            )}
+
+            {authMode !== 'forgot' && (
+              <div className="mt-3">
+                {googleEnabled ? (
+                  <>
+                    <div ref={googleSlotRef} className={`flex justify-center ${googleAuthLoading ? 'opacity-40 pointer-events-none' : ''}`} />
+                    {!googleButtonReady && !googleUiError && (
+                      <p className="text-xs text-slate-500 text-left mt-1">Loading Google sign-in...</p>
+                    )}
+                    {googleUiError && (
+                      <p className="text-xs text-red-600 text-left mt-1">
+                        {googleUiError} Current origin: {window.location.origin}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-500 text-left">Google Sign-In is not configured. Set VITE_GOOGLE_CLIENT_ID in frontend env and GOOGLE_CLIENT_ID in backend env.</p>
+                )}
+              </div>
+            )}
+
+            {authMode === 'forgot' && (
+              <>
+                {!forgotOtpVerified && forgotOtpSent && (
+                  <>
+                    <div className="mt-3 text-left">
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">OTP Code</label>
+                      <input
+                        type="text"
+                        placeholder="Enter 6-digit code"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 text-slate-900 outline-none"
+                        value={resetCode}
+                        onChange={(e) => setResetCode(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      onClick={handleVerifyOtp}
+                      disabled={authLoading}
+                      className="mt-3 w-full bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold py-3 rounded-xl border border-slate-200 transition-all disabled:opacity-60"
+                    >
+                      Verify OTP
+                    </button>
+                  </>
+                )}
+
+                {forgotOtpVerified && (
+                  <>
+                    <div className="mt-3 text-left">
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">New Password</label>
+                      <div className="relative">
+                        <input
+                          type={showNewPassword ? 'text' : 'password'}
+                          placeholder="Enter new password"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 pr-12 text-slate-900 outline-none"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewPassword((prev) => !prev)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 cursor-pointer"
+                          aria-label={showNewPassword ? 'Hide new password' : 'Show new password'}
+                        >
+                          {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">Minimum {minPasswordLength} characters.</p>
+                    </div>
+
+                    <div className="mt-3 text-left">
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Confirm New Password</label>
+                      <div className="relative">
+                        <input
+                          type={showNewPassword ? 'text' : 'password'}
+                          placeholder="Re-enter new password"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 pr-12 text-slate-900 outline-none"
+                          value={confirmNewPassword}
+                          onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewPassword((prev) => !prev)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 cursor-pointer"
+                          aria-label={showNewPassword ? 'Hide confirm password' : 'Show confirm password'}
+                        >
+                          {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleResetPassword}
+                      disabled={authLoading}
+                      className="mt-3 w-full bg-indigo-700 hover:bg-indigo-600 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-60"
+                    >
+                      Reset Password
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+
+            {authMode === 'login' && (
+              <button
+                onClick={() => switchAuthMode('forgot')}
+                className="mt-4 text-indigo-500 hover:text-indigo-700 text-sm"
+              >
+                Forgot password?
+              </button>
+            )}
+
+            {authMode === 'forgot' && (
+              <button
+                onClick={() => switchAuthMode('login')}
+                className="mt-4 text-indigo-500 hover:text-indigo-700 text-sm"
+              >
+                Back to sign in
+              </button>
+            )}
+
+            {authMode === 'register' && (
+              <button
+                onClick={() => switchAuthMode('login')}
+                className="mt-4 text-indigo-500 hover:text-indigo-700 text-sm"
+              >
+                Already have an account? Sign in
+              </button>
+            )}
           </GlassCard>
         </motion.div>
       </div>
@@ -128,312 +1600,147 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen grid grid-cols-[280px_1fr] p-6 gap-6 max-w-7xl mx-auto">
-      {/* Sidebar - Navigation & Stats */}
-      <aside className="space-y-6">
-        <GlassCard className="!p-4">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold">
-              {userId[0].toUpperCase()}
-            </div>
-            <div>
-              <p className="text-gray-400 text-xs">Patient Profile</p>
-              <h3 className="text-white font-semibold truncate max-w-[150px]">{userId}</h3>
-            </div>
-          </div>
-          <div className="space-y-4">
-            <div className="bg-white/5 p-3 rounded-lg border border-white/5">
-              <div className="flex justify-between items-center text-xs text-indigo-300 mb-1">
-                <span>Active Meds</span>
-                <Activity className="w-3 h-3" />
-              </div>
-              <span className="text-2xl font-bold text-white">{meds.length}</span>
-            </div>
-            
-            {interactions.length > 0 && (
-               <div className="bg-red-500/10 p-3 rounded-lg border border-red-500/20">
-                <div className="flex justify-between items-center text-xs text-red-400 mb-1">
-                  <span>Risk Alerts</span>
-                  <AlertTriangle className="w-3 h-3" />
-                </div>
-                <span className="text-2xl font-bold text-red-500">{interactions.length}</span>
-              </div>
-            )}
-          </div>
-          <button
-            onClick={() => { setUserId(''); setInteractions([]); setActiveView('dashboard'); }}
-            className="mt-6 w-full text-xs text-red-400 hover:text-red-300 py-2 border border-red-900/10 rounded-lg transition-colors"
-          >
-            Logout session
-          </button>
-        </GlassCard>
+    <div className="flex h-screen overflow-hidden bg-[#FBFBFD] text-slate-900 [&_button]:transition-all [&_button]:duration-200 [&_button]:ease-in-out">
+      <AppSidebar
+        sidebarOpen={sidebarOpen}
+        setSidebarOpen={setSidebarOpen}
+        currentUser={{ ...currentUser, name: formatUserName(currentUser.name) || currentUser.name }}
+        activeView={activeView}
+        onNavigate={(view) => {
+          if ((view === 'history' || view === 'safety') && requireProfileOrOpen()) return;
+          navigateToView(view);
+        }}
+        onLogout={handleLogout}
+        medsLength={meds.length}
+        profileRequired={profileRequired}
+        profileNudgeVisible={profileNudgeVisible}
+      />
 
-        <nav className="space-y-2">
-          <button 
-            onClick={() => setActiveView('dashboard')}
-            className={`w-full flex items-center justify-between p-4 rounded-xl transition-all ${activeView === 'dashboard' ? 'bg-indigo-600/20 border-indigo-500/40 text-white' : 'text-gray-500 hover:bg-white/5 border-transparent border'}`}
-          >
-            <span className="flex items-center gap-3"><Activity className="w-4 h-4" /> Dashboard</span>
-            {activeView === 'dashboard' && <ChevronRight className="w-4 h-4" />}
-          </button>
-          
-          <button 
-            onClick={() => meds.length >= 2 && setActiveView('safety')}
-            disabled={meds.length < 2}
-            className={`w-full flex items-center justify-between p-4 rounded-xl transition-all ${activeView === 'safety' ? 'bg-indigo-600/20 border-indigo-500/40 text-white' : 'text-gray-500 hover:bg-white/5 border-transparent border disabled:opacity-30'}`}
-          >
-            <span className="flex items-center gap-3"><Shield className="w-4 h-4" /> Safety Analysis</span>
-            {activeView === 'safety' && <ChevronRight className="w-4 h-4" />}
-          </button>
-        </nav>
-      </aside>
-
-      {/* Main Panel */}
-      <main className="space-y-6 min-h-0 overflow-y-auto pr-2">
-        <AnimatePresence mode="wait">
+      {/* Main Content */}
+      <main className="flex-1 h-screen overflow-hidden">
+        <div className="h-full p-4 overflow-hidden">
+          {offlineInfo && (
+            <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {offlineInfo}
+            </div>
+          )}
+          <AnimatePresence mode="wait">
           {activeView === 'dashboard' ? (
-            <motion.div
-              key="dashboard"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              className="space-y-6"
-            >
-              <section className="grid grid-cols-2 gap-6">
-                {/* Upload Section */}
-                <GlassCard className="relative overflow-hidden group">
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <h2 className="text-xl font-bold text-white">Digital Vision</h2>
-                      <p className="text-gray-400 text-sm">Upload Prescription or Report</p>
-                    </div>
-                    <Upload className="text-indigo-400 w-6 h-6" />
-                  </div>
-
-                  <label className="block border-2 border-dashed border-white/10 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all">
-                    <input type="file" className="hidden" onChange={handleUpload} accept="image/*,.pdf" />
-                    {isUploading ? (
-                      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity }} className="w-8 h-8 border-2 border-indigo-400 border-t-transparent rounded-full mx-auto" />
-                    ) : (
-                      <div className="space-y-2">
-                        <Plus className="w-10 h-10 text-gray-400 mx-auto" />
-                        <span className="text-gray-500 text-sm">Analyze Document</span>
-                      </div>
-                    )}
-                  </label>
-                </GlassCard>
-
-                {/* Active Medications List */}
-                <GlassCard className="flex flex-col">
-                  <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-xl font-bold text-white">Active Profile</h2>
-                    <Search className="text-gray-500 w-5 h-5 cursor-pointer hover:text-indigo-400 transition-colors" />
-                  </div>
-                  <div className="space-y-3 flex-1 overflow-y-auto max-h-[220px] pr-2 scrollbar-thin scrollbar-thumb-white/10">
-                    {meds.length === 0 ? (
-                      <p className="text-gray-500 text-center py-8 italic text-sm">No medications tracked yet</p>
-                    ) : (
-                      meds.map(med => (
-                        <motion.div
-                          layout
-                          key={med.id}
-                          className="group flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:border-indigo-500/30 transition-all"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
-                            <div>
-                              <p className="text-white text-sm font-medium">{med.name}</p>
-                              <p className="text-gray-500 text-[10px]">RxCUI: {med.rxcui}</p>
-                            </div>
-                          </div>
-                          <button onClick={() => deleteMed(med.id)} className="opacity-0 group-hover:opacity-100 p-2 text-red-500/60 hover:text-red-400 transition-all">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </motion.div>
-                      ))
-                    )}
-                  </div>
-                  {meds.length >= 2 && (
-                    <button
-                      onClick={checkSafety}
-                      disabled={loading}
-                      className="mt-6 w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(79,70,229,0.2)]"
-                    >
-                      {loading ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity }} className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full" /> : <><Shield className="w-4 h-4" /> Run Cross-Check</>}
-                    </button>
-                  )}
-                </GlassCard>
-              </section>
-            </motion.div>
+            <DashboardView
+              GlassCard={GlassCard}
+              entranceVariants={entranceVariants}
+              meds={meds}
+              savedPrescriptions={savedPrescriptions}
+              interactions={interactions}
+              profileRequired={profileRequired}
+              requireProfileOrOpen={requireProfileOrOpen}
+              setPrescriptionModalOpen={setPrescriptionModalOpen}
+              medSearch={medSearch}
+              setMedSearch={setMedSearch}
+              filteredMeds={filteredMeds}
+              getMedicationRiskTag={getMedicationRiskTag}
+              openSafetyForInteraction={openSafetyForInteraction}
+              renderHighlightedText={renderHighlightedText}
+              formatMedicationSource={formatMedicationSource}
+              openEditMed={openEditMed}
+              deleteMed={deleteMed}
+              manualError={manualError}
+              manualDrugType={manualDrugType}
+              setManualDrugType={setManualDrugType}
+              manualDrugName={manualDrugName}
+              setManualDrugName={setManualDrugName}
+              handleManualAdd={handleManualAdd}
+              manualDose={manualDose}
+              setManualDose={setManualDose}
+              manualFrequency={manualFrequency}
+              setManualFrequency={setManualFrequency}
+              manualSaving={manualSaving}
+            />
+          ) : activeView === 'history' ? (
+            <HistoryView
+              GlassCard={GlassCard}
+              savedPrescriptions={savedPrescriptions}
+              formatPrescriptionDate={formatPrescriptionDate}
+              openPrescriptionFile={openPrescriptionFile}
+              filePreviewLoading={filePreviewLoading}
+              setPendingDeleteRecordId={setPendingDeleteRecordId}
+            />
+          ) : activeView === 'profile' ? (
+            <ProfileView
+              GlassCard={GlassCard}
+              profileError={profileError}
+              profileForm={profileForm}
+              setProfileForm={setProfileForm}
+              profileSaving={profileSaving}
+              submitProfile={submitProfile}
+              currentUser={currentUser}
+              deleteAccountText={deleteAccountText}
+              setDeleteAccountText={setDeleteAccountText}
+              deleteAccountLoading={deleteAccountLoading}
+              deleteMyAccount={deleteMyAccount}
+            />
           ) : (
-            <motion.div
-              key="safety"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="space-y-6"
-            >
-              <div className="flex justify-between items-center mb-8 bg-indigo-500/5 p-6 rounded-3xl border border-indigo-500/10">
-                <div>
-                  <h2 className="text-2xl font-bold text-white">Safety Analysis Report</h2>
-                  <p className="text-indigo-300/60 text-sm">Clinical Cross-Reference Results</p>
-                </div>
-                <button onClick={() => setActiveView('dashboard')} className="text-sm bg-white/5 hover:bg-white/10 text-white px-4 py-2 rounded-xl border border-white/5 transition-all">
-                  Return to Dashboard
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {interactions.length === 0 ? (
-                  <GlassCard className="text-center py-20">
-                    <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4 opacity-50" />
-                    <p className="text-white text-xl font-bold">No High-Risk Interactions Found</p>
-                    <p className="text-gray-500 mt-2">Your current profile appears stable according to clinical FDA data.</p>
-                  </GlassCard>
-                ) : (
-                  interactions.map((inter, i) => (
-                    <GlassCard 
-                      key={i} 
-                      className={`cursor-pointer transition-all hover:bg-white/[0.07] !border-l-4 ${inter.severity === 'High' ? '!border-l-red-500' : '!border-l-orange-400'}`}
-                    >
-                      <div onClick={() => setExpandedInter(expandedInter === i ? null : i)}>
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-start gap-4">
-                             <div className={`p-3 rounded-2xl ${inter.severity === 'High' ? 'bg-red-500/10 text-red-400' : 'bg-orange-500/10 text-orange-400'}`}>
-                              <AlertTriangle className="w-6 h-6" />
-                            </div>
-                            <div className="space-y-1">
-                              <h4 className="text-xl font-bold text-white">{inter.drug_a} + {inter.drug_b}</h4>
-                              <span className={`inline-block text-[10px] uppercase font-black px-3 py-1 rounded-full ${inter.severity === 'High' ? 'bg-red-500 text-white' : 'bg-orange-500 text-white'}`}>
-                                {inter.severity} Risk
-                              </span>
-                            </div>
-                          </div>
-                          <ChevronRight className={`w-5 h-5 text-gray-600 transition-transform ${expandedInter === i ? 'rotate-90' : ''}`} />
-                        </div>
-
-                        <AnimatePresence>
-                          {expandedInter === i && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: 'auto', opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              className="overflow-hidden"
-                            >
-                              <div className="mt-6 pt-6 border-t border-white/5 space-y-4">
-                                <div className="bg-white/5 p-4 rounded-xl border border-white/5">
-                                  <p className="text-xs text-indigo-400 font-bold uppercase mb-2">Primary Risk Summary</p>
-                                  <p className="text-white text-lg font-medium leading-snug">{inter.summary}</p>
-                                </div>
-                                <div className="p-4">
-                                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-2">Clinical Source Evidence</p>
-                                  <p className="text-gray-400 text-sm leading-relaxed italic border-l-2 border-white/10 pl-4">
-                                    {inter.detail}
-                                  </p>
-                                </div>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                    </GlassCard>
-                  ))
-                )}
-              </div>
-
-              {interactions.length > 0 && (
-                <div className="bg-indigo-900/10 border border-indigo-400/20 p-6 rounded-3xl text-center">
-                  <p className="text-indigo-300 text-xs italic flex items-center justify-center gap-3">
-                    <Shield className="w-4 h-4" /> Data sourced from OpenFDA & RxNorm. Consult a pharmacist for confirmation.
-                  </p>
-                </div>
-              )}
-            </motion.div>
+            <div className="h-full overflow-y-auto pr-1">
+              <SafetyAnalysisView
+                meds={meds}
+                interactions={interactions}
+                report={safetyReport}
+                setActiveView={(view) => navigateToView(view)}
+                selectedInteraction={selectedSafetyInteraction}
+              />
+            </div>
           )}
         </AnimatePresence>
+        </div>
       </main>
 
-      {/* OCR Results Modal - Root Level Pop-up */}
-      <AnimatePresence>
-        {ocrResults && (
-          <div className="fixed inset-0 flex items-center justify-center p-4 z-999">
-            {/* Backdrop Overlay */}
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setOcrResults(null)}
-              className="absolute inset-0 bg-black/70 backdrop-blur-md"
-            />
-
-            {/* Modal Box */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative bg-[#0f172a] border border-white/10 rounded-[32px] shadow-2xl p-8 w-full max-w-lg overflow-hidden"
-            >
-              <div className="absolute inset-0 bg-linear-to-br from-indigo-500/10 to-transparent pointer-events-none" />
-              
-              <div className="flex justify-between items-center mb-8 relative z-10">
-                <div>
-                  <h2 className="text-3xl font-bold text-white tracking-tight">Verify Results</h2>
-                  <p className="text-indigo-300/60 text-sm mt-1">Detected {ocrResults.length} medications matching FDA data</p>
-                </div>
-                <button 
-                  onClick={() => setOcrResults(null)} 
-                  className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 rounded-full transition-all"
-                >
-                  <span className="text-2xl">&times;</span>
-                </button>
-              </div>
-
-              <div className="max-h-[380px] overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-white/10 relative z-10">
-                {ocrResults.length === 0 ? (
-                  <div className="text-center py-16">
-                    <Shield className="w-12 h-12 text-gray-600 mx-auto mb-4 opacity-50" />
-                    <p className="text-gray-500 italic">No clinical matches identified.</p>
-                  </div>
-                ) : (
-                  ocrResults.map(drug => (
-                    <div key={drug.name} className="group flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5 hover:border-indigo-500/30 transition-all">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 transition-colors">
-                          <CheckCircle className="w-6 h-6 text-indigo-400" />
-                        </div>
-                        <div>
-                          <p className="text-white font-bold text-lg">{drug.name}</p>
-                          <p className="text-gray-500 text-xs uppercase tracking-tighter">Clinical Match Found</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => confirmDrug(drug)} 
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white p-3 rounded-xl font-bold transition-all shadow-lg active:scale-95"
-                      >
-                        <Plus className="w-5 h-5" />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {ocrResults.length > 0 && (
-                <div className="mt-8 relative z-10 border-t border-white/5 pt-6 flex flex-col items-center">
-                  <p className="text-gray-500 text-[10px] uppercase tracking-widest mb-6 px-4 py-1 bg-white/5 rounded-full">
-                    Double check with your physical prescription
-                  </p>
-                  <button 
-                    onClick={() => setOcrResults(null)}
-                    className="w-full py-4 bg-white/5 hover:bg-white/10 text-white rounded-2xl font-bold transition-all border border-white/5 hover:border-white/10"
-                  >
-                    Done Verifying
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <AppModals
+        filePreviewOpen={filePreviewOpen}
+        filePreviewUrl={filePreviewUrl}
+        filePreviewName={filePreviewName}
+        setFilePreviewUrl={setFilePreviewUrl}
+        setFilePreviewOpen={setFilePreviewOpen}
+        prescriptionModalOpen={prescriptionModalOpen}
+        setPrescriptionModalOpen={setPrescriptionModalOpen}
+        manualError={manualError}
+        isDragOver={isDragOver}
+        setIsDragOver={setIsDragOver}
+        handleDropUpload={handleDropUpload}
+        handleUpload={handleUpload}
+        isUploading={isUploading}
+        ocrResults={ocrResults}
+        closeOcrReviewModal={closeOcrReviewModal}
+        ocrActionInfo={ocrActionInfo}
+        ocrReviewItems={ocrReviewItems}
+        updateReviewedDrug={updateReviewedDrug}
+        confirmDrug={confirmDrug}
+        confirmAllReviewedDrugs={confirmAllReviewedDrugs}
+        bulkAddLoading={bulkAddLoading}
+        savePrescriptionRecord={savePrescriptionRecord}
+        recordSaving={recordSaving}
+        rawText={rawText}
+        ocrRecordSaved={ocrRecordSaved}
+        pendingEditMed={pendingEditMed}
+        updateMedLoading={updateMedLoading}
+        setPendingEditMed={setPendingEditMed}
+        editMedName={editMedName}
+        setEditMedName={setEditMedName}
+        editMedType={editMedType}
+        setEditMedType={setEditMedType}
+        editMedDose={editMedDose}
+        setEditMedDose={setEditMedDose}
+        editMedFrequency={editMedFrequency}
+        setEditMedFrequency={setEditMedFrequency}
+        submitEditMed={submitEditMed}
+        pendingDeleteRecordId={pendingDeleteRecordId}
+        deleteRecordLoading={deleteRecordLoading}
+        setPendingDeleteRecordId={setPendingDeleteRecordId}
+        deletePrescriptionRecord={deletePrescriptionRecord}
+        pendingDeleteMedId={pendingDeleteMedId}
+        deleteMedLoading={deleteMedLoading}
+        setPendingDeleteMedId={setPendingDeleteMedId}
+        confirmDeleteMed={confirmDeleteMed}
+      />
     </div>
   );
 };

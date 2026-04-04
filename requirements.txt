@@ -6,3 +6,13 @@ requests
 pandas
 reflex
 reflex==0.8.28.post1
+fastapi
+uvicorn
+python-multipart
+pymongo
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+python-dotenv
+email-validator
+google-auth
