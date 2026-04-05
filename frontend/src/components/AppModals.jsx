@@ -6,6 +6,7 @@ const AppModals = ({
   filePreviewOpen,
   filePreviewUrl,
   filePreviewName,
+  filePreviewMime,
   setFilePreviewUrl,
   setFilePreviewOpen,
   prescriptionModalOpen,
@@ -48,7 +49,36 @@ const AppModals = ({
   deleteMedLoading,
   setPendingDeleteMedId,
   confirmDeleteMed,
+  premiumModalOpen,
+  setPremiumModalOpen,
+  premiumContext,
+  premiumPriceUsd,
 }) => {
+  const premiumMessages = {
+    medicine_limit: {
+      title: 'Medicine limit reached',
+      body: 'Free tier supports up to 6 medicines. Upgrade to Premium to track more medications safely.',
+    },
+    prescription_limit: {
+      title: 'Prescription archive limit reached',
+      body: 'Free tier supports up to 2 saved prescriptions. Upgrade to Premium for an expanded prescription history.',
+    },
+    caregiver_patient_limit: {
+      title: 'Caregiver roster limit reached',
+      body: 'Free caregiver plan supports 1 patient profile. Upgrade to Premium to manage multiple patients.',
+    },
+    profile_limit: {
+      title: 'Profile limit reached',
+      body: 'Free tier supports one profile per account. Upgrade to Premium to add and manage multiple profiles.',
+    },
+    general: {
+      title: 'Premium feature',
+      body: 'Upgrade to Premium to unlock advanced patient safety tools.',
+    },
+  };
+
+  const premiumCopy = premiumMessages[premiumContext] || premiumMessages.general;
+
   const closeFilePreview = () => {
     if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
     setFilePreviewUrl('');
@@ -71,7 +101,7 @@ const AppModals = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.98 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="relative w-full max-w-5xl h-[82vh] bg-white rounded-2xl shadow-xl ring-1 ring-slate-900/10 overflow-hidden"
+            className="relative w-full max-w-6xl h-[86vh] bg-white rounded-2xl shadow-xl ring-1 ring-slate-900/10 overflow-hidden"
           >
             <div className="h-12 px-4 border-b border-slate-200 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-900 truncate pr-4">{filePreviewName}</p>
@@ -79,8 +109,12 @@ const AppModals = ({
                 Close
               </button>
             </div>
-            {filePreviewUrl && (
-              <iframe src={filePreviewUrl} title="Uploaded prescription preview" className="w-full h-[calc(82vh-48px)] bg-slate-50" />
+            {filePreviewUrl && String(filePreviewMime || '').startsWith('image/') ? (
+              <div className="w-full h-[calc(86vh-48px)] bg-slate-50 flex items-center justify-center overflow-auto p-4">
+                <img src={filePreviewUrl} alt="Uploaded prescription preview" className="max-w-full max-h-full object-contain rounded-lg shadow-sm" />
+              </div>
+            ) : (
+              <iframe src={filePreviewUrl} title="Uploaded prescription preview" className="w-full h-[calc(86vh-48px)] bg-slate-50" />
             )}
           </motion.div>
         </div>
@@ -365,6 +399,49 @@ const AppModals = ({
                 className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
               >
                 {deleteMedLoading ? 'Deleting...' : 'Delete Medicine'}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {premiumModalOpen && (
+        <div className="fixed inset-0 z-1100 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setPremiumModalOpen(false)}
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            className="relative w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-xl p-6"
+          >
+            <p className="text-[11px] tracking-widest uppercase font-bold text-indigo-500">Premium</p>
+            <h3 className="text-xl font-bold text-slate-900 mt-1">{premiumCopy.title}</h3>
+            <p className="text-sm text-slate-600 mt-2">{premiumCopy.body}</p>
+
+            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50 p-4">
+              <p className="text-xs text-indigo-700 uppercase font-semibold tracking-wide">Premium Plan</p>
+              <p className="text-2xl font-bold text-indigo-700 mt-1">${premiumPriceUsd}/month</p>
+              <p className="text-xs text-indigo-700 mt-1">Includes multi-patient caregiver profiles and higher safety tracking limits.</p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setPremiumModalOpen(false)}
+                className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+              >
+                Not now
+              </button>
+              <button
+                onClick={() => setPremiumModalOpen(false)}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500"
+              >
+                Upgrade Now
               </button>
             </div>
           </motion.div>

@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, AlertTriangle, ChevronDown, ArrowLeft, Shield, Activity, Pill, Download } from 'lucide-react';
+import { CheckCircle, AlertTriangle, ChevronDown, Shield, Activity, Pill, Download } from 'lucide-react';
 
 const SEVERITY_CONFIG = {
   High: {
@@ -288,6 +288,8 @@ export default function SafetyAnalysisView({
   meds = [],
   interactions = [],
   report = null,
+  currentUser = null,
+  profile = null,
   setActiveView = () => {},
   selectedInteraction = null,
 }) {
@@ -322,58 +324,117 @@ export default function SafetyAnalysisView({
     return (order[a.severity] ?? 9) - (order[b.severity] ?? 9);
   });
 
-  const handleExportDoctorSummary = () => {
+  const handleExportDoctorSummary = async () => {
     const now = new Date();
     const stamp = now.toISOString().slice(0, 10);
+    const patientName = String(profile?.patient_name || currentUser?.name || 'Patient').trim() || 'Patient';
+    const patientEmail = String(currentUser?.email || '').trim();
+    const patientAge = profile?.age ? String(profile.age) : '';
+    const chronicConditions = String(profile?.chronic_conditions_text || '').trim();
+    const allergies = String(profile?.allergies_text || '').trim();
 
-    const lines = [
-      `PolySafe Doctor Summary (${stamp})`,
-      '',
-      `Tracked medications: ${meds.length}`,
-      `Total safety flags: ${sorted.length}`,
-      `High risk: ${highCount}`,
-      `Medium risk: ${medCount}`,
-      `Low risk: ${lowCount}`,
-      '',
-      'Current medications:',
-      ...meds.map((med, idx) => {
+    const safePatientSlug = patientName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'patient';
+
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const margin = 40;
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const maxWidth = pageWidth - (margin * 2);
+    let y = margin;
+
+    const ensureSpace = (needed) => {
+      if (y + needed > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+      }
+    };
+
+    const writeLine = (text, { size = 11, bold = false, color = '#111827', gap = 6 } = {}) => {
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      doc.setFontSize(size);
+      doc.setTextColor(color);
+      const lines = doc.splitTextToSize(String(text || ''), maxWidth);
+      ensureSpace(lines.length * (size + 3) + gap);
+      doc.text(lines, margin, y);
+      y += lines.length * (size + 3) + gap;
+    };
+
+    const writeSection = (title) => {
+      y += 4;
+      writeLine(title, { size: 14, bold: true, color: '#1f2937', gap: 8 });
+    };
+
+    doc.setFillColor(67, 56, 202);
+    doc.rect(0, 0, pageWidth, 84, 'F');
+    doc.setTextColor('#ffffff');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(20);
+    doc.text('PolySafe Safety Report', margin, 36);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(`Generated ${stamp}`, margin, 56);
+    y = 104;
+
+    doc.setFillColor(238, 242, 255);
+    doc.roundedRect(margin, y - 8, maxWidth, 72, 8, 8, 'F');
+    writeLine(`Patient: ${patientName}`, { size: 12, bold: true, color: '#312e81', gap: 3 });
+    if (patientEmail) writeLine(`Email: ${patientEmail}`, { size: 10, color: '#4338ca', gap: 3 });
+    if (patientAge) writeLine(`Age: ${patientAge}`, { size: 10, color: '#4338ca', gap: 3 });
+    writeLine(`Chronic conditions: ${chronicConditions || 'Not provided'}`, { size: 10, color: '#4338ca', gap: 3 });
+    writeLine(`Allergies: ${allergies || 'Not provided'}`, { size: 10, color: '#4338ca', gap: 10 });
+
+    writeLine(
+      `Tracked medications: ${meds.length}   |   Total safety flags: ${sorted.length}   |   High risk: ${highCount}   |   Medium risk: ${medCount}   |   Low risk: ${lowCount}`,
+      { size: 11, gap: 12 },
+    );
+
+    writeSection('Current medications');
+    if (meds.length === 0) {
+      writeLine('None', { size: 11 });
+    } else {
+      meds.forEach((med, idx) => {
         const dose = med?.dose ? `, dose: ${med.dose}` : '';
         const frequency = med?.frequency ? `, frequency: ${med.frequency}` : '';
-        return `${idx + 1}. ${med?.name || 'Unknown'}${dose}${frequency}`;
-      }),
-      '',
-      'Top priority alerts:',
-      ...(topPriority.length > 0
-        ? topPriority.map((alert, idx) => `${idx + 1}. [${alert?.severity || 'Unknown'}] ${toFriendlyText(alert?.summary || '')}`)
-        : ['None']),
-      '',
-      'Recommendations:',
-      ...(recommendations.length > 0
-        ? recommendations.map((item, idx) => `${idx + 1}. ${toFriendlyText(item)}`)
-        : ['None']),
-      '',
-      'Detailed interaction list:',
-      ...(sorted.length > 0
-        ? sorted.flatMap((inter, idx) => [
-          `${idx + 1}. ${inter?.drug_a || 'Unknown'} + ${inter?.drug_b || 'Unknown'}`,
-          `   Severity: ${inter?.severity || 'Unknown'}`,
-          `   Summary: ${toFriendlyText(inter?.summary || '')}`,
-          `   Detail: ${toFriendlyText(inter?.detail || '')}`,
-        ])
-        : ['No interactions detected.']),
-      '',
-      'Disclaimer: This summary is informational and does not replace medical advice.',
-    ];
+        writeLine(`${idx + 1}. ${med?.name || 'Unknown'}${dose}${frequency}`, { size: 11, gap: 4 });
+      });
+    }
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `polysafe_doctor_summary_${stamp}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    writeSection('Top priority alerts');
+    if (topPriority.length === 0) {
+      writeLine('None', { size: 11 });
+    } else {
+      topPriority.forEach((alert, idx) => {
+        writeLine(`${idx + 1}. [${alert?.severity || 'Unknown'}] ${toFriendlyText(alert?.summary || '')}`, { size: 11, gap: 4 });
+      });
+    }
+
+    writeSection('Recommendations');
+    if (recommendations.length === 0) {
+      writeLine('None', { size: 11 });
+    } else {
+      recommendations.forEach((item, idx) => {
+        writeLine(`${idx + 1}. ${toFriendlyText(item)}`, { size: 11, gap: 4 });
+      });
+    }
+
+    writeSection('Detailed interaction list');
+    if (sorted.length === 0) {
+      writeLine('No interactions detected.', { size: 11 });
+    } else {
+      sorted.forEach((inter, idx) => {
+        writeLine(`${idx + 1}. ${inter?.drug_a || 'Unknown'} + ${inter?.drug_b || 'Unknown'}`, { size: 11, bold: true, gap: 2 });
+        writeLine(`Severity: ${inter?.severity || 'Unknown'}`, { size: 10, color: '#6b7280', gap: 2 });
+        writeLine(`Summary: ${toFriendlyText(inter?.summary || '')}`, { size: 10, gap: 2 });
+        writeLine(`Detail: ${toFriendlyText(inter?.detail || '')}`, { size: 10, gap: 6 });
+      });
+    }
+
+    writeLine('Disclaimer: This summary is informational and does not replace medical advice.', { size: 10, color: '#6b7280', gap: 0 });
+    doc.save(`${safePatientSlug}_safety_report_${stamp}.pdf`);
   };
 
   useEffect(() => {
@@ -416,25 +477,6 @@ export default function SafetyAnalysisView({
     >
       {/* ── Page header ──────────────────────────────────────── */}
       <div style={{ marginBottom: 32 }}>
-        <button
-          onClick={() => setActiveView('dashboard')}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 13,
-            color: '#6B7280',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 0,
-            marginBottom: 16,
-          }}
-        >
-          <ArrowLeft size={14} />
-          Back to dashboard
-        </button>
-
         <div
           style={{
             display: 'flex',
@@ -462,9 +504,6 @@ export default function SafetyAnalysisView({
             </h1>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 12, color: '#9CA3AF' }}>
-              Always confirm findings with your pharmacist or doctor.
-            </span>
             <button
               onClick={handleExportDoctorSummary}
               style={{
@@ -483,7 +522,7 @@ export default function SafetyAnalysisView({
               title="Download a doctor-ready summary"
             >
               <Download size={14} />
-              Export Doctor Summary
+              Export
             </button>
           </div>
         </div>

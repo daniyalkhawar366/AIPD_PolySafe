@@ -9,8 +9,8 @@ const DashboardView = ({
   savedPrescriptions,
   interactions,
   profileRequired,
-  requireProfileOrOpen,
-  setPrescriptionModalOpen,
+  onUploadPrescription,
+  openSafetyPage,
   medSearch,
   setMedSearch,
   filteredMeds,
@@ -59,13 +59,17 @@ const DashboardView = ({
                 </div>
                 <p className="text-lg font-bold text-slate-900 leading-none mt-1.5">{savedPrescriptions.length}</p>
               </div>
-              <div className={`rounded-xl border px-4 py-2.5 min-w-28 shadow-sm ${highRiskCount > 0 ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'}`}>
+              <button
+                type="button"
+                onClick={openSafetyPage}
+                className={`rounded-xl border px-4 py-2.5 min-w-28 shadow-sm text-left transition-all hover:-translate-y-0.5 hover:shadow-md ${highRiskCount > 0 ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'}`}
+              >
                 <div className="flex items-center gap-2">
                   <Shield className="w-4 h-4" style={{ color: highRiskCount > 0 ? '#ef4444' : '#10b981' }} />
                   <p className={`text-[10px] uppercase tracking-widest font-bold ${highRiskCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>High Risk</p>
                 </div>
                 <p className={`text-lg font-bold leading-none mt-1.5 ${highRiskCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{highRiskCount}</p>
-              </div>
+              </button>
             </div>
           </div>
         </GlassCard>
@@ -79,10 +83,7 @@ const DashboardView = ({
               <p className="text-slate-500 text-xs mt-0.5">{meds.length} medication{meds.length !== 1 ? 's' : ''} tracked</p>
             </div>
             <button
-              onClick={() => {
-                if (requireProfileOrOpen()) return;
-                setPrescriptionModalOpen(true);
-              }}
+              onClick={onUploadPrescription}
               className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-2 shadow-sm transition-all"
             >
               <Upload className="w-4 h-4" />

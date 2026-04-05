@@ -8,7 +8,7 @@ const HistoryView = ({
   openPrescriptionFile,
   filePreviewLoading,
   setPendingDeleteRecordId,
-  setPrescriptionModalOpen,
+  onUploadPrescription,
 }) => (
   <motion.div key="history" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-5">
     <GlassCard className="p-5 lg:p-6 bg-linear-to-r from-slate-50 via-white to-indigo-50 border-indigo-100">
@@ -24,7 +24,7 @@ const HistoryView = ({
             <p className="text-xl font-bold text-slate-900 mt-1">{savedPrescriptions.length}</p>
           </div>
           <button
-            onClick={() => setPrescriptionModalOpen(true)}
+            onClick={onUploadPrescription}
             className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg font-semibold transition-all"
           >
             Upload Prescription

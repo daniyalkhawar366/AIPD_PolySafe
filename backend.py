@@ -161,6 +161,8 @@ class ResetPasswordAction(BaseModel):
 
 
 class UserProfileAction(BaseModel):
+    patient_name: str = ""
+    patient_email: str = ""
     age: int
     sex_at_birth: str = ""
     gender_identity: str = ""
@@ -186,6 +188,11 @@ class UserProfileAction(BaseModel):
     privacy_consent: bool = False
 
 
+class ProfileCreateAction(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
 class ShareLinkAction(BaseModel):
     purpose: str = "consultation"
     expires_hours: int = 24
@@ -197,10 +204,16 @@ class DeleteAccountAction(BaseModel):
 
 
 ALLOWED_ROLES = {"patient", "caregiver"}
+DEFAULT_PROFILE_ID = "default"
+PREMIUM_EMAIL_WHITELIST = {
+    "daniyalkhawar3@gmail.com",
+}
 
 
 def _default_profile() -> dict[str, Any]:
     return {
+        "patient_name": "",
+        "patient_email": "",
         "age": 0,
         "sex_at_birth": "",
         "gender_identity": "",
@@ -224,6 +237,95 @@ def _default_profile() -> dict[str, Any]:
         "emergency_notes": "",
         "care_team_patients": [],
     }
+
+
+def _default_profile_entry(name: str = "Primary Profile") -> dict[str, Any]:
+    return {
+        "id": DEFAULT_PROFILE_ID,
+        "name": str(name or "Primary Profile").strip()[:80] or "Primary Profile",
+        "profile": _default_profile(),
+        "profile_completed": False,
+        "privacy_consent": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _user_is_premium(user_doc: dict[str, Any] | None) -> bool:
+    email = str((user_doc or {}).get("email") or "").strip().lower()
+    return bool((user_doc or {}).get("is_premium", False) or email in PREMIUM_EMAIL_WHITELIST)
+
+
+def _normalize_profiles_state(user_doc: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], str, bool]:
+    changed = False
+    profiles = user_doc.get("profiles")
+
+    if not isinstance(profiles, list) or len(profiles) == 0:
+        entry = _default_profile_entry()
+        entry["profile"] = user_doc.get("profile") or _default_profile()
+        if not str(entry["profile"].get("patient_name") or "").strip():
+            entry["profile"]["patient_name"] = str(user_doc.get("name") or "").strip()
+            changed = True
+        if not str(entry["profile"].get("patient_email") or "").strip():
+            entry["profile"]["patient_email"] = str(user_doc.get("email") or "").strip().lower()
+            changed = True
+        entry["name"] = str(entry["profile"].get("patient_name") or entry.get("name") or "Primary Profile").strip()[:80] or "Primary Profile"
+        entry["profile_completed"] = bool(user_doc.get("profile_completed", False))
+        entry["privacy_consent"] = bool(user_doc.get("privacy_consent", False))
+        profiles = [entry]
+        changed = True
+
+    cleaned_profiles: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(profiles):
+        if not isinstance(raw, dict):
+            continue
+        profile_id = str(raw.get("id") or "").strip()[:64] or (DEFAULT_PROFILE_ID if index == 0 else uuid.uuid4().hex[:12])
+        if profile_id in seen_ids:
+            profile_id = uuid.uuid4().hex[:12]
+            changed = True
+        seen_ids.add(profile_id)
+
+        profile_doc = raw.get("profile") or _default_profile()
+        if profile_id == DEFAULT_PROFILE_ID:
+            if not str(profile_doc.get("patient_name") or "").strip():
+                profile_doc["patient_name"] = str(user_doc.get("name") or "").strip()
+                changed = True
+            if not str(profile_doc.get("patient_email") or "").strip():
+                profile_doc["patient_email"] = str(user_doc.get("email") or "").strip().lower()
+                changed = True
+
+        patient_label = str(profile_doc.get("patient_name") or "").strip()[:80]
+        name = str(raw.get("name") or "").strip()[:80]
+        if patient_label and (not name or name.lower().startswith("profile ") or name == "Primary Profile"):
+            name = patient_label
+            changed = True
+        if not name:
+            name = "Unnamed Patient"
+            changed = True
+
+        cleaned_profiles.append(
+            {
+                "id": profile_id,
+                "name": name,
+                "profile": profile_doc,
+                "profile_completed": bool(raw.get("profile_completed", False)),
+                "privacy_consent": bool(raw.get("privacy_consent", False)),
+                "created_at": raw.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    if len(cleaned_profiles) == 0:
+        cleaned_profiles = [_default_profile_entry()]
+        changed = True
+
+    active_profile_id = str(user_doc.get("active_profile_id") or "").strip()
+    active_profile = next((profile for profile in cleaned_profiles if profile["id"] == active_profile_id), None)
+    if active_profile is None:
+        active_profile = cleaned_profiles[0]
+        active_profile_id = str(active_profile["id"])
+        changed = True
+
+    return cleaned_profiles, active_profile, active_profile_id, changed
 
 
 def _normalize_role(role: str | None) -> str:
@@ -308,14 +410,25 @@ def _require_data_collections():
 
 
 def _public_user_doc(user_doc: dict[str, Any]) -> dict[str, Any]:
-    profile = user_doc.get("profile") or _default_profile()
+    profiles, active_profile, active_profile_id, _ = _normalize_profiles_state(user_doc)
+    profile = active_profile.get("profile") or _default_profile()
     return {
         "id": str(user_doc["_id"]),
         "name": user_doc.get("name", ""),
         "email": user_doc.get("email", ""),
         "role": user_doc.get("role", "patient"),
-        "profile_completed": bool(user_doc.get("profile_completed", False)),
-        "privacy_consent": bool(user_doc.get("privacy_consent", False)),
+        "is_premium": _user_is_premium(user_doc),
+        "profile_completed": bool(active_profile.get("profile_completed", False)),
+        "privacy_consent": bool(active_profile.get("privacy_consent", False)),
+        "active_profile_id": active_profile_id,
+        "profiles": [
+            {
+                "id": profile_item.get("id", ""),
+                "name": profile_item.get("name", "Profile"),
+                "profile_completed": bool(profile_item.get("profile_completed", False)),
+            }
+            for profile_item in profiles
+        ],
         "profile": profile,
         "created_at": user_doc.get("created_at"),
         "last_login": user_doc.get("last_login"),
@@ -378,6 +491,30 @@ def get_current_user(request: Request, token: str | None = Depends(oauth2_scheme
         user_doc = users_collection.find_one({"_id": ObjectId(user_id)})
         if not user_doc:
             raise credentials_exception
+
+        profiles, active_profile, active_profile_id, changed = _normalize_profiles_state(user_doc)
+        premium = _user_is_premium(user_doc)
+        if changed or bool(user_doc.get("is_premium", False)) != premium:
+            users_collection.update_one(
+                {"_id": user_doc["_id"]},
+                {
+                    "$set": {
+                        "profiles": profiles,
+                        "active_profile_id": active_profile_id,
+                        "profile": active_profile.get("profile") or _default_profile(),
+                        "profile_completed": bool(active_profile.get("profile_completed", False)),
+                        "privacy_consent": bool(active_profile.get("privacy_consent", False)),
+                        "is_premium": premium,
+                    }
+                },
+            )
+
+        user_doc["profiles"] = profiles
+        user_doc["active_profile_id"] = active_profile_id
+        user_doc["profile"] = active_profile.get("profile") or _default_profile()
+        user_doc["profile_completed"] = bool(active_profile.get("profile_completed", False))
+        user_doc["privacy_consent"] = bool(active_profile.get("privacy_consent", False))
+        user_doc["is_premium"] = premium
         return user_doc
     except (JWTError, PyMongoError, Exception):
         raise credentials_exception
@@ -404,6 +541,21 @@ def _auth_user_scope_aliases(user_doc: dict[str, Any]) -> list[str]:
             deduped.append(value)
             seen.add(value)
     return deduped
+
+
+def _active_profile_id(user_doc: dict[str, Any]) -> str:
+    active_profile_id = str(user_doc.get("active_profile_id") or "").strip()
+    return active_profile_id or DEFAULT_PROFILE_ID
+
+
+def _profile_query(profile_id: str | None) -> dict[str, Any]:
+    if profile_id is None:
+        return {}
+
+    normalized = str(profile_id or DEFAULT_PROFILE_ID).strip() or DEFAULT_PROFILE_ID
+    if normalized == DEFAULT_PROFILE_ID:
+        return {"$or": [{"profile_id": normalized}, {"profile_id": {"$exists": False}}]}
+    return {"profile_id": normalized}
 
 
 def _require_profile_completed(user_doc: dict[str, Any]):
@@ -446,9 +598,11 @@ def _has_duplicate_med(existing: list[dict[str, Any]], drug_name: str, rxcui: st
     return False
 
 
-def _get_mongo_medications(user_id: str) -> list[dict[str, Any]]:
+def _get_mongo_medications(user_id: str, profile_id: str | None = DEFAULT_PROFILE_ID) -> list[dict[str, Any]]:
     _require_data_collections()
-    docs = medications_collection.find({"user_id": user_id}).sort("date_added", 1)
+    query = {"user_id": user_id}
+    query.update(_profile_query(profile_id))
+    docs = medications_collection.find(query).sort("date_added", 1)
     meds: list[dict[str, Any]] = []
     for doc in docs:
         meds.append(
@@ -469,6 +623,7 @@ def _get_mongo_medications(user_id: str) -> list[dict[str, Any]]:
 
 def _add_mongo_medication(
     user_id: str,
+    profile_id: str,
     drug_name: str,
     rxcui: str,
     source: str,
@@ -482,6 +637,7 @@ def _add_mongo_medication(
     medications_collection.insert_one(
         {
             "user_id": user_id,
+            "profile_id": str(profile_id or DEFAULT_PROFILE_ID),
             "drug_name": drug_name,
             "rxcui": rxcui,
             "date_added": datetime.now(timezone.utc).isoformat(),
@@ -495,20 +651,23 @@ def _add_mongo_medication(
     )
 
 
-def _delete_mongo_medication(user_id: str, med_id: str):
+def _delete_mongo_medication(user_id: str, profile_id: str, med_id: str):
     _require_data_collections()
     try:
-        result = medications_collection.delete_one({"_id": ObjectId(med_id), "user_id": user_id})
+        med_filter = {"_id": ObjectId(med_id), "user_id": user_id}
+        med_filter.update(_profile_query(profile_id))
+        result = medications_collection.delete_one(med_filter)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid medication id")
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Medication not found")
 
 
-def _update_mongo_medication(user_id: str, med_id: str, action: MedicationUpdateAction):
+def _update_mongo_medication(user_id: str, profile_id: str, med_id: str, action: MedicationUpdateAction):
     _require_data_collections()
     try:
         target_filter = {"_id": ObjectId(med_id), "user_id": user_id}
+        target_filter.update(_profile_query(profile_id))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid medication id")
 
@@ -528,9 +687,11 @@ def _update_mongo_medication(user_id: str, med_id: str, action: MedicationUpdate
     medications_collection.update_one(target_filter, {"$set": update_doc})
 
 
-def _get_mongo_prescriptions(user_scope_ids: list[str]) -> list[dict[str, Any]]:
+def _get_mongo_prescriptions(user_scope_ids: list[str], profile_id: str | None = DEFAULT_PROFILE_ID) -> list[dict[str, Any]]:
     _require_data_collections()
-    docs = prescriptions_collection.find({"user_id": {"$in": user_scope_ids}}).sort("date_added", -1)
+    query = {"user_id": {"$in": user_scope_ids}}
+    query.update(_profile_query(profile_id))
+    docs = prescriptions_collection.find(query).sort("date_added", -1)
     results: list[dict[str, Any]] = []
     for doc in docs:
         results.append(
@@ -547,19 +708,22 @@ def _get_mongo_prescriptions(user_scope_ids: list[str]) -> list[dict[str, Any]]:
     return results
 
 
-def _save_mongo_prescription(user_id: str, raw_text: str, confidence: float, uploaded_file_name: str = ""):
+def _save_mongo_prescription(user_id: str, profile_id: str, raw_text: str, confidence: float, uploaded_file_name: str = ""):
     _require_data_collections()
     normalized = raw_text.strip()
     if not normalized:
         raise HTTPException(status_code=400, detail="Prescription text is empty")
 
-    already = prescriptions_collection.find_one({"user_id": user_id, "raw_text": normalized})
+    existing_filter = {"user_id": user_id, "raw_text": normalized}
+    existing_filter.update(_profile_query(profile_id))
+    already = prescriptions_collection.find_one(existing_filter)
     if already:
         return {"status": "already_exists"}
 
     prescriptions_collection.insert_one(
         {
             "user_id": user_id,
+            "profile_id": str(profile_id or DEFAULT_PROFILE_ID),
             "raw_text": normalized,
             "confidence": confidence,
             "date_added": datetime.now(timezone.utc).isoformat(),
@@ -570,17 +734,21 @@ def _save_mongo_prescription(user_id: str, raw_text: str, confidence: float, upl
     return {"status": "saved"}
 
 
-def _prescription_record_filter(user_scope_ids: list[str], record_id: str) -> dict[str, Any]:
+def _prescription_record_filter(user_scope_ids: list[str], profile_id: str | None, record_id: str) -> dict[str, Any]:
     # Support both Mongo ObjectId and legacy string ids.
     try:
-        return {"user_id": {"$in": user_scope_ids}, "$or": [{"_id": ObjectId(record_id)}, {"_id": record_id}]}
+        base_filter = {"user_id": {"$in": user_scope_ids}, "$or": [{"_id": ObjectId(record_id)}, {"_id": record_id}]}
+        base_filter.update(_profile_query(profile_id))
+        return base_filter
     except Exception:
-        return {"user_id": {"$in": user_scope_ids}, "_id": record_id}
+        base_filter = {"user_id": {"$in": user_scope_ids}, "_id": record_id}
+        base_filter.update(_profile_query(profile_id))
+        return base_filter
 
 
-def _delete_mongo_prescription(user_scope_ids: list[str], record_id: str):
+def _delete_mongo_prescription(user_scope_ids: list[str], profile_id: str | None, record_id: str):
     _require_data_collections()
-    record_filter = _prescription_record_filter(user_scope_ids, record_id)
+    record_filter = _prescription_record_filter(user_scope_ids, profile_id, record_id)
     existing = prescriptions_collection.find_one(record_filter)
     uploaded_file_name = os.path.basename(existing.get("uploaded_file_name", "")) if existing else ""
     if existing and existing.get("uploaded_file_name"):
@@ -594,6 +762,7 @@ def _delete_mongo_prescription(user_scope_ids: list[str], record_id: str):
     if uploaded_file_name:
         medications_collection.delete_many({
             "user_id": {"$in": user_scope_ids},
+            **_profile_query(profile_id),
             "prescription_file_name": uploaded_file_name,
         })
 
@@ -617,12 +786,23 @@ def register(payload: RegisterAction):
     if existing:
         raise HTTPException(status_code=400, detail="Invalid email")
 
+    default_profile = {
+        **_default_profile(),
+        "patient_name": payload.name.strip(),
+        "patient_email": email,
+    }
     user_doc = {
         "name": payload.name.strip(),
         "email": email,
         "password_hash": _hash_password(payload.password),
         "role": _normalize_role(payload.role),
-        "profile": _default_profile(),
+        "is_premium": email in PREMIUM_EMAIL_WHITELIST,
+        "profiles": [{
+            **_default_profile_entry(payload.name.strip()),
+            "profile": default_profile,
+        }],
+        "active_profile_id": DEFAULT_PROFILE_ID,
+        "profile": default_profile,
         "profile_completed": False,
         "privacy_consent": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -706,10 +886,13 @@ def google_auth(payload: GoogleAuthAction):
 
     user_doc = users_collection.find_one({"email": email})
     now_iso = datetime.now(timezone.utc).isoformat()
+    premium = email in PREMIUM_EMAIL_WHITELIST
 
     if user_doc:
         if not user_doc.get("googleId"):
             raise HTTPException(status_code=401, detail="Invalid email")
+
+        profiles, active_profile, active_profile_id, _ = _normalize_profiles_state(user_doc)
         users_collection.update_one(
             {"_id": user_doc["_id"]},
             {
@@ -720,21 +903,34 @@ def google_auth(payload: GoogleAuthAction):
                     "avatar": id_info.get("picture"),
                     "last_login": now_iso,
                     "role": user_doc.get("role", "patient") or "patient",
-                    "profile": user_doc.get("profile") or _default_profile(),
-                    "profile_completed": bool(user_doc.get("profile_completed", False)),
-                    "privacy_consent": bool(user_doc.get("privacy_consent", False)),
+                    "is_premium": premium or bool(user_doc.get("is_premium", False)),
+                    "profiles": profiles,
+                    "active_profile_id": active_profile_id,
+                    "profile": active_profile.get("profile") or _default_profile(),
+                    "profile_completed": bool(active_profile.get("profile_completed", False)),
+                    "privacy_consent": bool(active_profile.get("privacy_consent", False)),
                 }
             },
         )
         user_doc = users_collection.find_one({"_id": user_doc["_id"]})
     else:
         name = id_info.get("name") or email.split("@")[0]
+        profile_entry = _default_profile_entry()
+        profile_entry["name"] = str(name).strip()[:80] or "Primary Profile"
+        profile_entry["profile"] = {
+            **_default_profile(),
+            "patient_name": str(name).strip()[:120],
+            "patient_email": email,
+        }
         insert_doc = {
             "name": name,
             "email": email,
             "password_hash": _hash_password(uuid.uuid4().hex[:12]),
             "role": "patient",
-            "profile": _default_profile(),
+            "is_premium": premium,
+            "profiles": [profile_entry],
+            "active_profile_id": profile_entry["id"],
+            "profile": profile_entry["profile"],
             "profile_completed": False,
             "privacy_consent": False,
             "created_at": now_iso,
@@ -872,13 +1068,98 @@ def reset_password(payload: ResetPasswordAction):
 
 @app.get("/api/me/profile")
 def get_my_profile(current_user: dict[str, Any] = Depends(get_current_user)):
-    profile = current_user.get("profile") or _default_profile()
+    profiles, active_profile, active_profile_id, _ = _normalize_profiles_state(current_user)
+    profile = active_profile.get("profile") or _default_profile()
     return {
         "role": current_user.get("role", "patient"),
-        "profile_completed": bool(current_user.get("profile_completed", False)),
-        "privacy_consent": bool(current_user.get("privacy_consent", False)),
+        "is_premium": _user_is_premium(current_user),
+        "profile_completed": bool(active_profile.get("profile_completed", False)),
+        "privacy_consent": bool(active_profile.get("privacy_consent", False)),
+        "active_profile_id": active_profile_id,
+        "profiles": [
+            {
+                "id": item.get("id", ""),
+                "name": item.get("name", "Profile"),
+                "profile_completed": bool(item.get("profile_completed", False)),
+            }
+            for item in profiles
+        ],
         "profile": profile,
     }
+
+
+@app.post("/api/me/profiles")
+def create_my_profile(action: ProfileCreateAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+
+    profiles, _, _, _ = _normalize_profiles_state(current_user)
+    if not _user_is_premium(current_user) and len(profiles) >= 1:
+        raise HTTPException(status_code=403, detail="Upgrade to Premium to add multiple profiles")
+
+    patient_name = str(action.name or "").strip()[:80]
+    patient_email = str(action.email or "").strip().lower()[:120]
+
+    profile_name = patient_name or "Unnamed Patient"
+
+    new_profile_id = uuid.uuid4().hex[:12]
+    profiles.append(
+        {
+            "id": new_profile_id,
+            "name": profile_name,
+            "profile": {
+                **_default_profile(),
+                "patient_name": patient_name,
+                "patient_email": patient_email,
+            },
+            "profile_completed": False,
+            "privacy_consent": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    users_collection.update_one(
+        {"_id": current_user["_id"]},
+        {
+            "$set": {
+                "profiles": profiles,
+                "active_profile_id": new_profile_id,
+                "profile": {
+                    **_default_profile(),
+                    "patient_name": patient_name,
+                    "patient_email": patient_email,
+                },
+                "profile_completed": False,
+                "privacy_consent": False,
+            }
+        },
+    )
+    refreshed_user = users_collection.find_one({"_id": current_user["_id"]})
+    return {"success": True, "user": _public_user_doc(refreshed_user)}
+
+
+@app.post("/api/me/profiles/{profile_id}/activate")
+def activate_my_profile(profile_id: str, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+
+    profiles, _, _, _ = _normalize_profiles_state(current_user)
+    active_profile = next((item for item in profiles if str(item.get("id")) == str(profile_id)), None)
+    if active_profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    users_collection.update_one(
+        {"_id": current_user["_id"]},
+        {
+            "$set": {
+                "active_profile_id": str(profile_id),
+                "profiles": profiles,
+                "profile": active_profile.get("profile") or _default_profile(),
+                "profile_completed": bool(active_profile.get("profile_completed", False)),
+                "privacy_consent": bool(active_profile.get("privacy_consent", False)),
+            }
+        },
+    )
+    refreshed_user = users_collection.find_one({"_id": current_user["_id"]})
+    return {"success": True, "user": _public_user_doc(refreshed_user)}
 
 
 @app.put("/api/me/profile")
@@ -895,6 +1176,8 @@ def update_my_profile(action: UserProfileAction, current_user: dict[str, Any] = 
         raise HTTPException(status_code=400, detail="Consent is required to continue")
 
     profile_doc = {
+        "patient_name": str(action.patient_name or "").strip()[:120],
+        "patient_email": str(action.patient_email or "").strip().lower()[:120],
         "age": int(action.age),
         "sex_at_birth": str(action.sex_at_birth or "").strip()[:40],
         "gender_identity": str(action.gender_identity or "").strip()[:60],
@@ -919,10 +1202,29 @@ def update_my_profile(action: UserProfileAction, current_user: dict[str, Any] = 
         "care_team_patients": _sanitize_care_team_patients(action.care_team_patients),
     }
 
+    profiles, _, active_profile_id, _ = _normalize_profiles_state(current_user)
+    next_profiles: list[dict[str, Any]] = []
+    for profile_entry in profiles:
+        if str(profile_entry.get("id")) == str(active_profile_id):
+            patient_display_name = str(profile_doc.get("patient_name") or "").strip()[:80]
+            next_profiles.append(
+                {
+                    **profile_entry,
+                    "name": patient_display_name or profile_entry.get("name") or "Unnamed Patient",
+                    "profile": profile_doc,
+                    "profile_completed": True,
+                    "privacy_consent": True,
+                }
+            )
+        else:
+            next_profiles.append(profile_entry)
+
     users_collection.update_one(
         {"_id": current_user["_id"]},
         {
             "$set": {
+                "profiles": next_profiles,
+                "active_profile_id": active_profile_id,
                 "profile": profile_doc,
                 "profile_completed": True,
                 "privacy_consent": True,
@@ -947,8 +1249,8 @@ def export_my_data(current_user: dict[str, Any] = Depends(get_current_user)):
     export_doc = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "user": _public_user_doc(current_user),
-        "medications": _get_mongo_medications(user_scope_id),
-        "prescriptions": _get_mongo_prescriptions(user_scope_aliases),
+        "medications": _get_mongo_medications(user_scope_id, None),
+        "prescriptions": _get_mongo_prescriptions(user_scope_aliases, None),
         "share_links": [
             {
                 "purpose": doc.get("purpose", "consultation"),
@@ -977,7 +1279,7 @@ def delete_my_account(action: DeleteAccountAction, current_user: dict[str, Any] 
     user_scope_id = _auth_user_scope_id(current_user)
     user_scope_aliases = _auth_user_scope_aliases(current_user)
 
-    for record in _get_mongo_prescriptions(user_scope_aliases):
+    for record in _get_mongo_prescriptions(user_scope_aliases, None):
         uploaded = os.path.basename(record.get("uploaded_file_name", ""))
         if uploaded:
             file_path = os.path.join(UPLOAD_DIR, uploaded)
@@ -1051,7 +1353,7 @@ def consume_share_link(token: str):
     if not user_doc:
         raise HTTPException(status_code=404, detail="Owner account not found")
 
-    meds = _get_mongo_medications(owner_id)
+    meds = _get_mongo_medications(owner_id, None)
     results = check_safety_for_profile(meds) if len(meds) >= 2 else []
     degraded_mode = False
     if results == "API_FAILED":
@@ -1151,7 +1453,7 @@ def get_user_meds(user_id: str):
 
 @app.get("/api/me/meds")
 def get_my_meds(current_user: dict[str, Any] = Depends(get_current_user)):
-    return _get_mongo_medications(_auth_user_scope_id(current_user))
+    return _get_mongo_medications(_auth_user_scope_id(current_user), _active_profile_id(current_user))
 
 @app.post("/api/add")
 def add_med(action: DrugAction):
@@ -1168,12 +1470,14 @@ def add_med(action: DrugAction):
 def add_my_med(action: DrugAction, current_user: dict[str, Any] = Depends(get_current_user)):
     _require_profile_completed(current_user)
     user_id = _auth_user_scope_id(current_user)
-    existing = _get_mongo_medications(user_id)
+    profile_id = _active_profile_id(current_user)
+    existing = _get_mongo_medications(user_id, profile_id)
     if _has_duplicate_med(existing, action.drug_name, action.rxcui):
         return {"status": "already_exists"}
 
     _add_mongo_medication(
         user_id,
+        profile_id,
         action.drug_name,
         action.rxcui,
         action.source or "API/React/Auth",
@@ -1188,17 +1492,18 @@ def add_my_med(action: DrugAction, current_user: dict[str, Any] = Depends(get_cu
 
 @app.delete("/api/me/meds/{med_id}")
 def delete_my_med(med_id: str, current_user: dict[str, Any] = Depends(get_current_user)):
-    _delete_mongo_medication(_auth_user_scope_id(current_user), med_id)
+    _delete_mongo_medication(_auth_user_scope_id(current_user), _active_profile_id(current_user), med_id)
     return {"status": "deleted"}
 
 
 @app.put("/api/me/meds/{med_id}")
 def update_my_med(med_id: str, action: MedicationUpdateAction, current_user: dict[str, Any] = Depends(get_current_user)):
     user_id = _auth_user_scope_id(current_user)
-    existing = [m for m in _get_mongo_medications(user_id) if m.get("id") != med_id]
+    profile_id = _active_profile_id(current_user)
+    existing = [m for m in _get_mongo_medications(user_id, profile_id) if m.get("id") != med_id]
     if _has_duplicate_med(existing, action.drug_name, "N/A"):
         raise HTTPException(status_code=409, detail="Medication with this name already exists")
-    _update_mongo_medication(user_id, med_id, action)
+    _update_mongo_medication(user_id, profile_id, med_id, action)
     return {"status": "updated"}
 
 @app.delete("/api/meds/{med_id}")
@@ -1238,7 +1543,7 @@ def check_interactions(user_id: str):
 @app.get("/api/me/interactions")
 def check_my_interactions(current_user: dict[str, Any] = Depends(get_current_user)):
     user_id = _auth_user_scope_id(current_user)
-    meds = _get_mongo_medications(user_id)
+    meds = _get_mongo_medications(user_id, _active_profile_id(current_user))
     user_profile = current_user.get("profile") or _default_profile()
 
     results = check_safety_for_profile(meds, user_profile)
@@ -1269,13 +1574,15 @@ async def upload_my_prescription(
 
 @app.get("/api/me/prescriptions")
 def get_my_prescriptions(current_user: dict[str, Any] = Depends(get_current_user)):
-    return _get_mongo_prescriptions(_auth_user_scope_aliases(current_user))
+    return _get_mongo_prescriptions(_auth_user_scope_aliases(current_user), _active_profile_id(current_user))
 
 
 @app.post("/api/me/prescriptions")
 def save_my_prescription(action: PrescriptionAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    profile_id = _active_profile_id(current_user)
     return _save_mongo_prescription(
         _auth_user_scope_id(current_user),
+        profile_id,
         action.raw_text,
         action.confidence,
         action.uploaded_file_name,
@@ -1284,14 +1591,16 @@ def save_my_prescription(action: PrescriptionAction, current_user: dict[str, Any
 
 @app.delete("/api/me/prescriptions/{record_id}")
 def delete_my_prescription(record_id: str, current_user: dict[str, Any] = Depends(get_current_user)):
-    _delete_mongo_prescription(_auth_user_scope_aliases(current_user), record_id)
+    _delete_mongo_prescription(_auth_user_scope_aliases(current_user), _active_profile_id(current_user), record_id)
     return {"status": "deleted"}
 
 
 @app.get("/api/me/prescriptions/{record_id}/file")
 def get_my_prescription_file(record_id: str, current_user: dict[str, Any] = Depends(get_current_user)):
     _require_data_collections()
-    doc = prescriptions_collection.find_one(_prescription_record_filter(_auth_user_scope_aliases(current_user), record_id))
+    doc = prescriptions_collection.find_one(
+        _prescription_record_filter(_auth_user_scope_aliases(current_user), _active_profile_id(current_user), record_id)
+    )
 
     if not doc:
         raise HTTPException(status_code=404, detail="Prescription record not found")

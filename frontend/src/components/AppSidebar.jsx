@@ -60,6 +60,7 @@ const AppSidebar = ({
               </div>
               <div className="min-w-0 flex-1">
                 <h3 className="text-slate-900 text-sm font-semibold leading-tight wrap-break-word">{currentUser?.name || 'User'}</h3>
+                <p className="text-[11px] text-slate-500 mt-1 break-all leading-tight">{currentUser?.email || ''}</p>
               </div>
             </div>
             <button

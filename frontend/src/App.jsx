@@ -63,6 +63,11 @@ const formatUserName = (fullName) => {
 };
 
 const MANUAL_SOURCE_DEFAULT = 'Prescription medicine';
+const PREMIUM_PRICE_USD = 5;
+const FREE_TIER_MED_LIMIT = 6;
+const FREE_TIER_PRESCRIPTION_LIMIT = 2;
+const FREE_TIER_CAREGIVER_PATIENT_LIMIT = 1;
+const FREE_TIER_PROFILE_LIMIT = 1;
 const VIEW_TO_PATH = {
   dashboard: '/dashboard',
   safety: '/safety',
@@ -136,8 +141,12 @@ const App = () => {
   const [offlineInfo, setOfflineInfo] = useState('');
   const [profileNudgeVisible, setProfileNudgeVisible] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [profileActionLoading, setProfileActionLoading] = useState(false);
+  const [profileSwitching, setProfileSwitching] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [profileForm, setProfileForm] = useState({
+    patient_name: '',
+    patient_email: '',
     age: '',
     gender_identity: '',
     weight_kg: '',
@@ -161,6 +170,7 @@ const App = () => {
     care_team_patients: [],
     privacy_consent: false,
   });
+
   const [deleteAccountText, setDeleteAccountText] = useState('');
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [updateMedLoading, setUpdateMedLoading] = useState(false);
@@ -174,6 +184,7 @@ const App = () => {
   const [filePreviewLoading, setFilePreviewLoading] = useState(false);
   const [filePreviewUrl, setFilePreviewUrl] = useState('');
   const [filePreviewName, setFilePreviewName] = useState('');
+  const [filePreviewMime, setFilePreviewMime] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [prescriptionModalOpen, setPrescriptionModalOpen] = useState(false);
   const [sessionRestorePending, setSessionRestorePending] = useState(false);
@@ -186,6 +197,8 @@ const App = () => {
   const [ocrActionInfo, setOcrActionInfo] = useState('');
   const [ocrMedsAdded, setOcrMedsAdded] = useState(false);
   const [selectedSafetyInteraction, setSelectedSafetyInteraction] = useState(null);
+  const [premiumModalOpen, setPremiumModalOpen] = useState(false);
+  const [premiumContext, setPremiumContext] = useState('general');
   const safetyRefreshTimerRef = useRef(null);
 
   const entranceVariants = {
@@ -342,6 +355,83 @@ const App = () => {
     if (!interaction) return;
     setSelectedSafetyInteraction(interaction);
     navigateToView('safety');
+  };
+
+  const openSafetyPage = () => {
+    if (requireProfileOrOpen()) return;
+    navigateToView('safety');
+  };
+
+  const openPremiumUpsell = (context = 'general') => {
+    setPremiumContext(context);
+    setPremiumModalOpen(true);
+  };
+
+  const accountProfiles = Array.isArray(currentUser?.profiles) ? currentUser.profiles : [];
+  const activeProfileId = currentUser?.active_profile_id || accountProfiles[0]?.id || 'default';
+
+  const addNewProfile = async (patientName, patientEmail) => {
+    if (!currentUser) return;
+    if (!currentUser?.is_premium && accountProfiles.length >= FREE_TIER_PROFILE_LIMIT) {
+      openPremiumUpsell('profile_limit');
+      return false;
+    }
+
+    const normalizedName = String(patientName || '').trim();
+    const normalizedEmail = String(patientEmail || '').trim();
+    if (!normalizedName) {
+      setProfileError('Patient name is required to create a profile.');
+      return false;
+    }
+
+    setProfileError('');
+    setProfileActionLoading(true);
+    try {
+      const res = await axios.post(`${API_BASE}/me/profiles`, { name: normalizedName, email: normalizedEmail }, getAuthConfig());
+      setCurrentUser(res.data.user);
+      return true;
+    } catch (err) {
+      if (err.response?.status === 403) {
+        openPremiumUpsell('profile_limit');
+      }
+      setProfileError(err.response?.data?.detail || 'Could not create a new profile.');
+      return false;
+    } finally {
+      setProfileActionLoading(false);
+    }
+  };
+
+  const switchProfile = async (profileId) => {
+    if (!currentUser || !profileId || profileId === activeProfileId) return;
+
+    setProfileError('');
+    setProfileActionLoading(true);
+    setProfileSwitching(true);
+    try {
+      const res = await axios.post(`${API_BASE}/me/profiles/${profileId}/activate`, {}, getAuthConfig());
+      setCurrentUser(res.data.user);
+      setSelectedSafetyInteraction(null);
+
+      const medsRes = await axios.get(`${API_BASE}/me/meds`, getAuthConfig(token));
+      setMeds(Array.isArray(medsRes.data) ? medsRes.data : []);
+
+      const prescriptionsRes = await axios.get(`${API_BASE}/me/prescriptions`, getAuthConfig(token));
+      setSavedPrescriptions(Array.isArray(prescriptionsRes.data) ? prescriptionsRes.data : []);
+
+      if (Array.isArray(medsRes.data) && medsRes.data.length >= 2) {
+        const safetyRes = await axios.get(`${API_BASE}/me/interactions`, getAuthConfig(token));
+        setInteractions(safetyRes.data.interactions || []);
+        setSafetyReport(safetyRes.data.report || null);
+      } else {
+        setInteractions([]);
+        setSafetyReport(null);
+      }
+    } catch (err) {
+      setProfileError(err.response?.data?.detail || 'Could not switch profile.');
+    } finally {
+      setProfileActionLoading(false);
+      setProfileSwitching(false);
+    }
   };
 
   const formatPrescriptionDate = (rawDate) => {
@@ -504,6 +594,8 @@ const App = () => {
       const existingProfile = currentUser.profile || {};
       setProfileForm((prev) => ({
         ...prev,
+        patient_name: existingProfile.patient_name || '',
+        patient_email: existingProfile.patient_email || '',
         age: existingProfile.age ? String(existingProfile.age) : '',
         gender_identity: existingProfile.gender_identity || '',
         weight_kg: existingProfile.weight_kg ? String(existingProfile.weight_kg) : '',
@@ -901,6 +993,8 @@ const App = () => {
         emergency_notes: profileForm.emergency_notes,
         care_team_patients: profileForm.care_team_patients,
         privacy_consent: Boolean(profileForm.privacy_consent),
+        patient_name: profileForm.patient_name,
+        patient_email: profileForm.patient_email,
       };
 
       const res = await axios.put(`${API_BASE}/me/profile`, payload, getAuthConfig());
@@ -967,6 +1061,7 @@ const App = () => {
     setFilePreviewLoading(false);
     setFilePreviewUrl('');
     setFilePreviewName('');
+    setFilePreviewMime('');
     navigateToView('dashboard', { replace: true });
     setPrescriptionModalOpen(false);
     setSidebarOpen(true);
@@ -1034,6 +1129,11 @@ const App = () => {
   };
 
   const confirmDrug = async (drug) => {
+    if (meds.length >= FREE_TIER_MED_LIMIT) {
+      openPremiumUpsell('medicine_limit');
+      return;
+    }
+
     const drugNameValidation = validateDrugName(drug.draftName || drug.name || '');
     if (!drugNameValidation.valid) {
       setManualError(drugNameValidation.error);
@@ -1080,6 +1180,13 @@ const App = () => {
   const confirmAllReviewedDrugs = async () => {
     const candidates = ocrReviewItems.filter((drug) => drug.include && (drug.draftName || '').trim());
     if (candidates.length === 0) return;
+
+    const freeSlots = FREE_TIER_MED_LIMIT - meds.length;
+    if (freeSlots <= 0 || candidates.length > freeSlots) {
+      openPremiumUpsell('medicine_limit');
+      return;
+    }
+
     setBulkAddLoading(true);
     setOcrActionInfo('');
     try {
@@ -1103,6 +1210,13 @@ const App = () => {
       setManualError('Complete your profile before adding medicines.');
       return;
     }
+
+    if (meds.length >= FREE_TIER_MED_LIMIT) {
+      setManualError('Free tier supports up to 6 medicines. Upgrade to add more.');
+      openPremiumUpsell('medicine_limit');
+      return;
+    }
+
     setManualError('');
     
     // Check for duplicate medication (case-insensitive)
@@ -1268,6 +1382,12 @@ const App = () => {
 
   const savePrescriptionRecord = async () => {
     if (!rawText.trim()) return;
+
+    if (savedPrescriptions.length >= FREE_TIER_PRESCRIPTION_LIMIT) {
+      openPremiumUpsell('prescription_limit');
+      return;
+    }
+
     setRecordSaving(true);
     try {
       await axios.post(`${API_BASE}/me/prescriptions`, {
@@ -1288,6 +1408,17 @@ const App = () => {
     }
   };
 
+  const openPrescriptionUpload = () => {
+    if (requireProfileOrOpen()) return;
+
+    if (savedPrescriptions.length >= FREE_TIER_PRESCRIPTION_LIMIT) {
+      openPremiumUpsell('prescription_limit');
+      return;
+    }
+
+    setPrescriptionModalOpen(true);
+  };
+
   const openPrescriptionFile = async (recordId) => {
     if (!recordId) return;
     try {
@@ -1299,6 +1430,7 @@ const App = () => {
       const blobUrl = URL.createObjectURL(res.data);
       if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
       setFilePreviewUrl(blobUrl);
+      setFilePreviewMime(res.headers?.['content-type'] || res.data?.type || '');
       const record = savedPrescriptions.find((item) => item.id === recordId);
       setFilePreviewName(record?.uploaded_file_name || 'Uploaded file');
       setFilePreviewOpen(true);
@@ -1643,7 +1775,7 @@ const App = () => {
       <AppSidebar
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
-        currentUser={{ ...currentUser, name: formatUserName(currentUser.name) || currentUser.name }}
+        currentUser={currentUser}
         activeView={activeView}
         onNavigate={(view) => {
           if ((view === 'history' || view === 'safety') && requireProfileOrOpen()) return;
@@ -1663,6 +1795,14 @@ const App = () => {
               {offlineInfo}
             </div>
           )}
+          {profileSwitching ? (
+            <div className="h-full w-full max-w-5xl mx-auto space-y-4 animate-pulse">
+              <div className="h-24 rounded-2xl bg-slate-200" />
+              <div className="h-14 rounded-xl bg-slate-200" />
+              <div className="h-14 rounded-xl bg-slate-200" />
+              <div className="h-14 rounded-xl bg-slate-200" />
+            </div>
+          ) : (
           <AnimatePresence mode="wait">
           {activeView === 'dashboard' ? (
             <DashboardView
@@ -1672,8 +1812,8 @@ const App = () => {
               savedPrescriptions={savedPrescriptions}
               interactions={interactions}
               profileRequired={profileRequired}
-              requireProfileOrOpen={requireProfileOrOpen}
-              setPrescriptionModalOpen={setPrescriptionModalOpen}
+              onUploadPrescription={openPrescriptionUpload}
+              openSafetyPage={openSafetyPage}
               medSearch={medSearch}
               setMedSearch={setMedSearch}
               filteredMeds={filteredMeds}
@@ -1703,7 +1843,7 @@ const App = () => {
               openPrescriptionFile={openPrescriptionFile}
               filePreviewLoading={filePreviewLoading}
               setPendingDeleteRecordId={setPendingDeleteRecordId}
-              setPrescriptionModalOpen={setPrescriptionModalOpen}
+              onUploadPrescription={openPrescriptionUpload}
             />
           ) : activeView === 'profile' ? (
             <ProfileView
@@ -1712,8 +1852,15 @@ const App = () => {
               profileForm={profileForm}
               setProfileForm={setProfileForm}
               profileSaving={profileSaving}
+              profileActionLoading={profileActionLoading}
               submitProfile={submitProfile}
+              profiles={accountProfiles}
+              activeProfileId={activeProfileId}
+              onAddNewProfile={addNewProfile}
+              onSwitchProfile={switchProfile}
               currentUser={currentUser}
+              onRequirePremium={openPremiumUpsell}
+              caregiverPatientLimit={FREE_TIER_CAREGIVER_PATIENT_LIMIT}
               deleteAccountText={deleteAccountText}
               setDeleteAccountText={setDeleteAccountText}
               deleteAccountLoading={deleteAccountLoading}
@@ -1725,12 +1872,15 @@ const App = () => {
                 meds={meds}
                 interactions={interactions}
                 report={safetyReport}
+                currentUser={currentUser}
+                profile={profileForm}
                 setActiveView={(view) => navigateToView(view)}
                 selectedInteraction={selectedSafetyInteraction}
               />
             </div>
           )}
         </AnimatePresence>
+          )}
         </div>
       </main>
 
@@ -1738,6 +1888,7 @@ const App = () => {
         filePreviewOpen={filePreviewOpen}
         filePreviewUrl={filePreviewUrl}
         filePreviewName={filePreviewName}
+        filePreviewMime={filePreviewMime}
         setFilePreviewUrl={setFilePreviewUrl}
         setFilePreviewOpen={setFilePreviewOpen}
         prescriptionModalOpen={prescriptionModalOpen}
@@ -1780,6 +1931,10 @@ const App = () => {
         deleteMedLoading={deleteMedLoading}
         setPendingDeleteMedId={setPendingDeleteMedId}
         confirmDeleteMed={confirmDeleteMed}
+        premiumModalOpen={premiumModalOpen}
+        setPremiumModalOpen={setPremiumModalOpen}
+        premiumContext={premiumContext}
+        premiumPriceUsd={PREMIUM_PRICE_USD}
       />
     </div>
   );
