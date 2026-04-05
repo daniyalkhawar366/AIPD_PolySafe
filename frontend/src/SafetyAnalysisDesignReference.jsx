@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, AlertTriangle, ChevronDown, ArrowLeft, Shield, Activity, Pill } from 'lucide-react';
+import { CheckCircle, AlertTriangle, ChevronDown, ArrowLeft, Shield, Activity, Pill, Download } from 'lucide-react';
 
 const SEVERITY_CONFIG = {
   High: {
@@ -322,6 +322,60 @@ export default function SafetyAnalysisView({
     return (order[a.severity] ?? 9) - (order[b.severity] ?? 9);
   });
 
+  const handleExportDoctorSummary = () => {
+    const now = new Date();
+    const stamp = now.toISOString().slice(0, 10);
+
+    const lines = [
+      `PolySafe Doctor Summary (${stamp})`,
+      '',
+      `Tracked medications: ${meds.length}`,
+      `Total safety flags: ${sorted.length}`,
+      `High risk: ${highCount}`,
+      `Medium risk: ${medCount}`,
+      `Low risk: ${lowCount}`,
+      '',
+      'Current medications:',
+      ...meds.map((med, idx) => {
+        const dose = med?.dose ? `, dose: ${med.dose}` : '';
+        const frequency = med?.frequency ? `, frequency: ${med.frequency}` : '';
+        return `${idx + 1}. ${med?.name || 'Unknown'}${dose}${frequency}`;
+      }),
+      '',
+      'Top priority alerts:',
+      ...(topPriority.length > 0
+        ? topPriority.map((alert, idx) => `${idx + 1}. [${alert?.severity || 'Unknown'}] ${toFriendlyText(alert?.summary || '')}`)
+        : ['None']),
+      '',
+      'Recommendations:',
+      ...(recommendations.length > 0
+        ? recommendations.map((item, idx) => `${idx + 1}. ${toFriendlyText(item)}`)
+        : ['None']),
+      '',
+      'Detailed interaction list:',
+      ...(sorted.length > 0
+        ? sorted.flatMap((inter, idx) => [
+          `${idx + 1}. ${inter?.drug_a || 'Unknown'} + ${inter?.drug_b || 'Unknown'}`,
+          `   Severity: ${inter?.severity || 'Unknown'}`,
+          `   Summary: ${toFriendlyText(inter?.summary || '')}`,
+          `   Detail: ${toFriendlyText(inter?.detail || '')}`,
+        ])
+        : ['No interactions detected.']),
+      '',
+      'Disclaimer: This summary is informational and does not replace medical advice.',
+    ];
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `polysafe_doctor_summary_${stamp}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   useEffect(() => {
     if (!selectedInteractionKey || sorted.length === 0) return;
 
@@ -407,9 +461,31 @@ export default function SafetyAnalysisView({
               Safety analysis
             </h1>
           </div>
-          <span style={{ fontSize: 12, color: '#9CA3AF' }}>
-            Always confirm findings with your pharmacist or doctor.
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 12, color: '#9CA3AF' }}>
+              Always confirm findings with your pharmacist or doctor.
+            </span>
+            <button
+              onClick={handleExportDoctorSummary}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                border: '1px solid #C7D2FE',
+                color: '#4338CA',
+                background: '#EEF2FF',
+                padding: '8px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+              title="Download a doctor-ready summary"
+            >
+              <Download size={14} />
+              Export Doctor Summary
+            </button>
+          </div>
         </div>
 
         <hr style={{ border: 'none', borderTop: '1px solid #E5E7EB', marginTop: 20 }} />

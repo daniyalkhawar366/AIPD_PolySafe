@@ -10,7 +10,7 @@ import random
 import secrets
 import smtplib
 from typing import Any
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 import bcrypt
 from jose import JWTError, jwt
 from pymongo import MongoClient
@@ -166,15 +166,23 @@ class UserProfileAction(BaseModel):
     gender_identity: str = ""
     weight_kg: float = 0.0
     height_cm: float = 0.0
-    chronic_conditions: list[str] = []
-    allergies: list[str] = []
+    chronic_conditions: list[str] = Field(default_factory=list)
+    allergies: list[str] = Field(default_factory=list)
     kidney_disease: bool = False
     liver_disease: bool = False
     smoking_status: str = "unknown"
     alcohol_use: str = "unknown"
+    grapefruit_use: str = "unknown"
+    dairy_use: str = "unknown"
+    egfr: float = 0.0
+    alt_u_l: float = 0.0
+    ast_u_l: float = 0.0
+    inr: float = 0.0
+    glucose_mg_dl: float = 0.0
     emergency_contact_name: str = ""
     emergency_contact_phone: str = ""
     emergency_notes: str = ""
+    care_team_patients: list[dict[str, Any]] = Field(default_factory=list)
     privacy_consent: bool = False
 
 
@@ -204,9 +212,17 @@ def _default_profile() -> dict[str, Any]:
         "liver_disease": False,
         "smoking_status": "unknown",
         "alcohol_use": "unknown",
+        "grapefruit_use": "unknown",
+        "dairy_use": "unknown",
+        "egfr": 0.0,
+        "alt_u_l": 0.0,
+        "ast_u_l": 0.0,
+        "inr": 0.0,
+        "glucose_mg_dl": 0.0,
         "emergency_contact_name": "",
         "emergency_contact_phone": "",
         "emergency_notes": "",
+        "care_team_patients": [],
     }
 
 
@@ -228,6 +244,31 @@ def _sanitize_string_list(values: list[str]) -> list[str]:
         seen.add(key)
         cleaned.append(item)
     return cleaned[:30]
+
+
+def _sanitize_care_team_patients(values: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    seen_emails: set[str] = set()
+    for value in values or []:
+        if not isinstance(value, dict):
+            continue
+        name = str(value.get("name") or "").strip()[:120]
+        email = str(value.get("email") or "").strip().lower()[:120]
+        relationship = str(value.get("relationship") or "").strip()[:60]
+        notes = str(value.get("notes") or "").strip()[:300]
+        if not name and not email:
+            continue
+        if email and email in seen_emails:
+            continue
+        if email:
+            seen_emails.add(email)
+        cleaned.append({
+            "name": name,
+            "email": email,
+            "relationship": relationship,
+            "notes": notes,
+        })
+    return cleaned[:20]
 
 
 def _create_access_token(subject: str) -> str:
@@ -865,9 +906,17 @@ def update_my_profile(action: UserProfileAction, current_user: dict[str, Any] = 
         "liver_disease": bool(action.liver_disease),
         "smoking_status": str(action.smoking_status or "unknown").strip()[:40],
         "alcohol_use": str(action.alcohol_use or "unknown").strip()[:40],
+        "grapefruit_use": str(action.grapefruit_use or "unknown").strip()[:40],
+        "dairy_use": str(action.dairy_use or "unknown").strip()[:40],
+        "egfr": float(action.egfr or 0.0),
+        "alt_u_l": float(action.alt_u_l or 0.0),
+        "ast_u_l": float(action.ast_u_l or 0.0),
+        "inr": float(action.inr or 0.0),
+        "glucose_mg_dl": float(action.glucose_mg_dl or 0.0),
         "emergency_contact_name": str(action.emergency_contact_name or "").strip()[:120],
         "emergency_contact_phone": str(action.emergency_contact_phone or "").strip()[:40],
         "emergency_notes": str(action.emergency_notes or "").strip()[:500],
+        "care_team_patients": _sanitize_care_team_patients(action.care_team_patients),
     }
 
     users_collection.update_one(

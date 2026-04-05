@@ -81,23 +81,23 @@ def convert_to_plain_language(text):
     Summarizes the clinical interaction text into a primary risk + formatted detail.
     """
     # Identify high-level risk categories with more nuance
-    primary_risk = "General interaction risk identified."
+    primary_risk = "These medicines may not work well together."
     
     # Priority-based matching for specific risks (if/elif ensures the most specific match wins)
     if "ulcer" in text.lower() or "stomach" in text.lower() or "gastric" in text.lower():
-        primary_risk = "Major risk of stomach lining damage and GI bleeding."
+        primary_risk = "Higher chance of stomach irritation or internal bleeding."
     elif "bleeding" in text.lower() or "anticoagulant" in text.lower() or "hemorrhage" in text.lower():
-        primary_risk = "Significant increase in internal bleeding and bruising risk."
+        primary_risk = "Higher chance of bleeding or easy bruising."
     elif "liver" in text.lower() or "hepatotoxicity" in text.lower():
-        primary_risk = "High potential for serious liver toxicity or failure."
+        primary_risk = "May put extra stress on the liver."
     elif "kidney" in text.lower() or "nephro" in text.lower() or "renal" in text.lower():
-        primary_risk = "Risk of acute kidney strain or renal impairment."
+        primary_risk = "May put extra stress on the kidneys."
     elif "heart" in text.lower() or "cardiac" in text.lower() or "arrhythmia" in text.lower():
-        primary_risk = "Risk of abnormal heart rhythm or cardiovascular stress."
+        primary_risk = "May affect heart rhythm or blood pressure control."
     elif "breathing" in text.lower() or "respiratory" in text.lower():
-        primary_risk = "Potential for dangerous respiratory distress or failure."
+        primary_risk = "May affect breathing in sensitive patients."
     elif "drowsiness" in text.lower() or "sedation" in text.lower() or "cns" in text.lower():
-        primary_risk = "Highly likely to cause extreme sedation/sleepiness."
+        primary_risk = "May cause severe drowsiness or dizziness."
 
     # Apply phrase mappings with bold formatting
     formatted_detail = text
@@ -142,11 +142,14 @@ def check_interactions_for_profile(medications):
             if interaction_text:
                 severity = analyze_severity(interaction_text)
                 explanation_data = convert_to_plain_language(interaction_text)
+                summary = explanation_data["primary_risk"]
+                if summary == "These medicines may not work well together.":
+                    summary = f"{drug_a} and {drug_b} may interact."
                 interactions.append({
                     "drug_a": drug_a,
                     "drug_b": drug_b,
                     "severity": severity,
-                    "summary": explanation_data["primary_risk"],
+                    "summary": summary,
                     "detail": explanation_data["detail"]
                 })
 
@@ -363,7 +366,27 @@ def _profile_allergies(profile: dict) -> list[str]:
     raw = profile.get("allergies") or []
     if not isinstance(raw, list):
         return []
-    return [str(item).strip().lower() for item in raw if str(item).strip()]
+
+    pieces: list[str] = []
+    for item in raw:
+        text = str(item).strip().lower()
+        if not text:
+            continue
+        # Handle entries like "penicillin and aspirin" as two separate allergies.
+        tokens = re.split(r",|;|/|\band\b", text)
+        for token in tokens:
+            cleaned = token.strip()
+            if cleaned:
+                pieces.append(cleaned)
+
+    deduped: list[str] = []
+    seen = set()
+    for allergy in pieces:
+        if allergy in seen:
+            continue
+        seen.add(allergy)
+        deduped.append(allergy)
+    return deduped
 
 
 def _profile_conditions(profile: dict) -> list[str]:
@@ -373,11 +396,274 @@ def _profile_conditions(profile: dict) -> list[str]:
     return [str(item).strip().lower() for item in raw if str(item).strip()]
 
 
-def check_profile_context_risks(medications: list[dict], profile: dict | None = None) -> list[dict]:
+def _normalize_use_value(value: str | None) -> str:
+    return str(value or "unknown").strip().lower()
+
+
+def _is_active_exposure(value: str | None) -> bool:
+    normalized = _normalize_use_value(value)
+    return normalized not in {"", "unknown", "none", "no", "false", "0", "not used"}
+
+
+def check_food_and_alcohol_risks(medications: list[dict], profile: dict | None = None) -> list[dict]:
     profile = profile or {}
     alerts: list[dict] = []
     med_names = [str(med.get("name") or "").strip() for med in medications if str(med.get("name") or "").strip()]
     lowered_names = [name.lower() for name in med_names]
+
+    if not med_names:
+        return alerts
+
+    alcohol_active = _is_active_exposure(profile.get("alcohol_use"))
+    grapefruit_active = _is_active_exposure(profile.get("grapefruit_use"))
+    dairy_active = _is_active_exposure(profile.get("dairy_use"))
+
+    alcohol_sensitive = [
+        name for name in med_names
+        if any(token in name.lower() for token in ["acetaminophen", "paracetamol", "ibuprofen", "naproxen", "diclofenac", "aspirin", "metformin"])
+    ]
+    if alcohol_active and alcohol_sensitive:
+        severity = "High" if any(token in ", ".join(lowered_names) for token in ["acetaminophen", "paracetamol", "metformin"]) else "Medium"
+        alerts.append({
+            "drug_a": alcohol_sensitive[0],
+            "drug_b": "Alcohol use",
+            "severity": severity,
+            "summary": "Alcohol + current medicines may increase side effects.",
+            "detail": (
+                f"Alcohol use is marked as '{_normalize_use_value(profile.get('alcohol_use'))}'. Relevant medicines: {', '.join(alcohol_sensitive)}. "
+                "Alcohol can raise liver, stomach, or blood-sugar risks depending on the medicine."
+            ),
+            "kind": "food_alcohol",
+        })
+
+    grapefruit_sensitive = [
+        name for name in med_names
+        if any(token in name.lower() for token in ["simvastatin", "atorvastatin", "amlodipine", "losartan", "nifedipine"])
+    ]
+    if grapefruit_active and grapefruit_sensitive:
+        alerts.append({
+            "drug_a": grapefruit_sensitive[0],
+            "drug_b": "Grapefruit use",
+            "severity": "Medium",
+            "summary": "Grapefruit may change how this medicine is absorbed.",
+            "detail": (
+                f"Grapefruit or grapefruit juice is marked in profile. Relevant medicines: {', '.join(grapefruit_sensitive)}. "
+                "Grapefruit can raise medicine levels and side effects for some drugs."
+            ),
+            "kind": "food_grapefruit",
+        })
+
+    dairy_sensitive = [
+        name for name in med_names
+        if any(token in name.lower() for token in ["doxycycline", "tetracycline", "minocycline", "ciprofloxacin", "levofloxacin", "alendronate", "levothyroxine"])
+    ]
+    if dairy_active and dairy_sensitive:
+        alerts.append({
+            "drug_a": dairy_sensitive[0],
+            "drug_b": "Dairy/calcium use",
+            "severity": "Low",
+            "summary": "Dairy or calcium may reduce absorption of some medicines.",
+            "detail": (
+                f"Dairy/calcium use is marked in profile. Relevant medicines: {', '.join(dairy_sensitive)}. "
+                "Take these apart from milk, yogurt, calcium, or iron when your pharmacist recommends it."
+            ),
+            "kind": "food_dairy",
+        })
+
+    if any(any(token in name.lower() for token in ["ibuprofen", "naproxen", "diclofenac", "aspirin", "ketorolac"]) for name in med_names):
+        alerts.append({
+            "drug_a": med_names[0],
+            "drug_b": "NSAID use",
+            "severity": "Low",
+            "summary": "NSAIDs are easier on the stomach when taken with food.",
+            "detail": "If you take ibuprofen, naproxen, diclofenac, or aspirin, taking them with food may reduce stomach upset. Follow your prescriber/pharmacist instructions.",
+            "kind": "food_nsaid_timing",
+        })
+
+    return alerts
+
+
+def check_lab_aware_risks(medications: list[dict], profile: dict | None = None) -> list[dict]:
+    profile = profile or {}
+    alerts: list[dict] = []
+    med_names = [str(med.get("name") or "").strip() for med in medications if str(med.get("name") or "").strip()]
+    lowered_names = [name.lower() for name in med_names]
+
+    if not med_names:
+        return alerts
+
+    try:
+        egfr = float(profile.get("egfr") or 0.0)
+    except Exception:
+        egfr = 0.0
+
+    try:
+        alt_value = float(profile.get("alt_u_l") or 0.0)
+    except Exception:
+        alt_value = 0.0
+
+    try:
+        ast_value = float(profile.get("ast_u_l") or 0.0)
+    except Exception:
+        ast_value = 0.0
+
+    try:
+        inr_value = float(profile.get("inr") or 0.0)
+    except Exception:
+        inr_value = 0.0
+
+    try:
+        glucose_value = float(profile.get("glucose_mg_dl") or 0.0)
+    except Exception:
+        glucose_value = 0.0
+
+    renal_sensitive = [name for name in med_names if any(token in name.lower() for token in ["metformin", "ibuprofen", "naproxen", "diclofenac", "lisinopril", "losartan", "aspirin"])]
+    if egfr > 0 and renal_sensitive:
+        if egfr < 30:
+            severity = "High"
+            summary = "Low kidney function may make current medicines unsafe without review."
+        elif egfr < 60:
+            severity = "Medium"
+            summary = "Kidney function is lower than normal, so some medicines need review."
+        else:
+            severity = "Low"
+            summary = "Kidney function should still be watched with some medicines."
+        alerts.append({
+            "drug_a": renal_sensitive[0],
+            "drug_b": f"eGFR {egfr:.0f}",
+            "severity": severity,
+            "summary": summary,
+            "detail": (
+                f"Latest eGFR is {egfr:.0f}. Relevant medicines in your list: {', '.join(renal_sensitive)}. "
+                "Kidney function affects how safely some medicines can be used."
+            ),
+            "kind": "lab_egfr",
+        })
+
+    liver_sensitive = [name for name in med_names if any(token in name.lower() for token in ["acetaminophen", "paracetamol", "atorvastatin", "simvastatin", "diclofenac", "aspirin"])]
+    if (alt_value > 0 or ast_value > 0) and liver_sensitive:
+        elevated = max(alt_value, ast_value)
+        if elevated >= 120:
+            severity = "High"
+            summary = "Liver markers are high enough to make some medicines risky."
+        elif elevated >= 60:
+            severity = "Medium"
+            summary = "Liver markers are above normal, so medicines need a closer look."
+        else:
+            severity = "Low"
+            summary = "Liver markers should be watched while using these medicines."
+        alerts.append({
+            "drug_a": liver_sensitive[0],
+            "drug_b": f"ALT/AST {elevated:.0f}",
+            "severity": severity,
+            "summary": summary,
+            "detail": (
+                f"ALT is {alt_value:.0f} and AST is {ast_value:.0f}. Relevant medicines: {', '.join(liver_sensitive)}. "
+                "These values matter because some medicines can stress the liver."
+            ),
+            "kind": "lab_liver",
+        })
+
+    if inr_value > 0:
+        bleeding_sensitive = [name for name in med_names if any(token in name.lower() for token in ["aspirin", "ibuprofen", "naproxen", "diclofenac", "warfarin"])]
+        if bleeding_sensitive and inr_value >= 3.0:
+            alerts.append({
+                "drug_a": bleeding_sensitive[0],
+                "drug_b": f"INR {inr_value:.1f}",
+                "severity": "High",
+                "summary": "High INR plus blood-thinning medicines may increase bleeding risk.",
+                "detail": (
+                    f"INR is {inr_value:.1f}. Relevant medicines: {', '.join(bleeding_sensitive)}. "
+                    "High INR can mean blood is already thin, so NSAIDs/aspirin deserve special caution."
+                ),
+                "kind": "lab_inr",
+            })
+        elif bleeding_sensitive and inr_value >= 1.5:
+            alerts.append({
+                "drug_a": bleeding_sensitive[0],
+                "drug_b": f"INR {inr_value:.1f}",
+                "severity": "Medium",
+                "summary": "INR is above normal, so bleeding risk deserves a closer look.",
+                "detail": (
+                    f"INR is {inr_value:.1f}. Relevant medicines: {', '.join(bleeding_sensitive)}. "
+                    "Please review this with your clinician, especially if you take NSAIDs or aspirin."
+                ),
+                "kind": "lab_inr",
+            })
+
+    if glucose_value > 0:
+        diabetes_sensitive = [name for name in med_names if any(token in name.lower() for token in ["metformin", "insulin", "glipizide", "gliclazide", "glimepiride"])]
+        if diabetes_sensitive and glucose_value >= 180:
+            alerts.append({
+                "drug_a": diabetes_sensitive[0],
+                "drug_b": f"Glucose {glucose_value:.0f}",
+                "severity": "Medium",
+                "summary": "Glucose is high, so diabetes medicines need a review of control.",
+                "detail": (
+                    f"Glucose is {glucose_value:.0f} mg/dL. Relevant medicines: {', '.join(diabetes_sensitive)}. "
+                    "This suggests a closer look at whether current diabetes treatment is enough."
+                ),
+                "kind": "lab_glucose",
+            })
+
+    return alerts
+
+
+def check_pill_burden_optimizations(medications: list[dict], alerts: list[dict]) -> list[dict]:
+    if len(medications) < 2:
+        return []
+
+    alert_pairs = {
+        frozenset({str(alert.get("drug_a") or "").strip().lower(), str(alert.get("drug_b") or "").strip().lower()})
+        for alert in alerts
+        if str(alert.get("drug_a") or "").strip() and str(alert.get("drug_b") or "").strip()
+    }
+
+    schedule_groups: dict[str, list[dict]] = defaultdict(list)
+    for med in medications:
+        schedule = _normalize_schedule(med.get("frequency"))
+        if schedule:
+          schedule_groups[schedule].append(med)
+
+    optimizations: list[dict] = []
+    for schedule, group in schedule_groups.items():
+        if len(group) < 2:
+            continue
+
+        names = [str(m.get("name") or "").strip() for m in group if str(m.get("name") or "").strip()]
+        if len(names) < 2:
+            continue
+
+        safe_names = []
+        for name in names:
+            if all(frozenset({name.lower(), other.lower()}) not in alert_pairs for other in names if other != name):
+                safe_names.append(name)
+
+        if len(safe_names) < 2:
+            continue
+
+        if schedule not in {"once daily", "daily"} and not schedule.startswith("every"):
+            continue
+
+        optimizations.append({
+            "drug_a": safe_names[0],
+            "drug_b": safe_names[1],
+            "severity": "Low",
+            "summary": f"You may be able to group some {schedule} medicines together.",
+            "detail": (
+                f"These medicines share the same schedule: {', '.join(safe_names[:4])}. "
+                "If your pharmacist says it is safe, grouping them at one time of day may make the routine easier to follow."
+            ),
+            "kind": "pill_burden_optimization",
+        })
+
+    return optimizations[:3]
+
+
+def check_profile_context_risks(medications: list[dict], profile: dict | None = None) -> list[dict]:
+    profile = profile or {}
+    alerts: list[dict] = []
+    med_names = [str(med.get("name") or "").strip() for med in medications if str(med.get("name") or "").strip()]
 
     if not med_names:
         return alerts
@@ -392,10 +678,10 @@ def check_profile_context_risks(medications: list[dict], profile: dict | None = 
             "drug_a": med_names[0],
             "drug_b": "Age 65+ profile context",
             "severity": "Medium" if len(med_names) >= 4 else "Low",
-            "summary": "Age-sensitive medication review recommended for this profile.",
+            "summary": "Extra caution needed because this profile is age 65+.",
             "detail": (
-                f"Profile age is {age_value}. With {len(med_names)} active medicines, sensitivity to side effects and interactions can increase. "
-                "Review dose timing and necessity with your clinician."
+                f"Age is recorded as {age_value}. With {len(med_names)} active medicines, side effects and interactions can hit harder. "
+                "Ask your doctor/pharmacist if all doses and timings are still the safest option."
             ),
             "kind": "profile_age",
         })
@@ -408,10 +694,10 @@ def check_profile_context_risks(medications: list[dict], profile: dict | None = 
                 "drug_a": kidney_matches[0],
                 "drug_b": "Kidney disease profile context",
                 "severity": "High" if any("ibuprofen" in name.lower() or "naproxen" in name.lower() or "diclofenac" in name.lower() for name in kidney_matches) else "Medium",
-                "summary": "Kidney profile flag: medicine choice/dose may need renal review.",
+                "summary": "Kidney condition + current medicines may be an unsafe combination.",
                 "detail": (
-                    f"Profile indicates kidney disease. Relevant medicines in your list: {', '.join(kidney_matches)}. "
-                    "A renal dose/safety check is recommended before continuing unchanged."
+                    f"Kidney disease is marked in profile. Medicines to review now: {', '.join(kidney_matches)}. "
+                    "Do a kidney-safety dose check with your clinician before continuing unchanged."
                 ),
                 "kind": "profile_kidney",
             })
@@ -424,10 +710,10 @@ def check_profile_context_risks(medications: list[dict], profile: dict | None = 
                 "drug_a": liver_matches[0],
                 "drug_b": "Liver disease profile context",
                 "severity": "High" if any("acetaminophen" in name.lower() or "paracetamol" in name.lower() for name in liver_matches) else "Medium",
-                "summary": "Liver profile flag: medicines may increase hepatic burden.",
+                "summary": "Liver condition + current medicines may increase side-effect risk.",
                 "detail": (
-                    f"Profile indicates liver disease. Relevant medicines in your list: {', '.join(liver_matches)}. "
-                    "A liver safety review is recommended for dose and monitoring."
+                    f"Liver disease is marked in profile. Medicines to review now: {', '.join(liver_matches)}. "
+                    "Ask for a liver-safety review for dose and follow-up checks."
                 ),
                 "kind": "profile_liver",
             })
@@ -446,10 +732,10 @@ def check_profile_context_risks(medications: list[dict], profile: dict | None = 
                 "drug_a": matched_meds[0],
                 "drug_b": f"Allergy profile: {allergy}",
                 "severity": "High",
-                "summary": "Potential allergy conflict with your recorded profile.",
+                "summary": "Possible allergy match found between profile and medicine list.",
                 "detail": (
-                    f"Profile allergies include '{allergy}'. Matching medicine(s): {', '.join(matched_meds)}. "
-                    "Stop and verify immediately with your clinician/pharmacist if this is an active allergy."
+                    f"Recorded allergy: '{allergy}'. Matching medicine(s): {', '.join(matched_meds)}. "
+                    "If this allergy is active, do not take the medicine until a pharmacist/doctor confirms safety."
                 ),
                 "kind": "profile_allergy",
             })
@@ -463,10 +749,10 @@ def check_profile_context_risks(medications: list[dict], profile: dict | None = 
                 "drug_a": nsaid_matches[0],
                 "drug_b": "Hypertension profile context",
                 "severity": "Medium",
-                "summary": "Blood-pressure profile context: NSAID use may need monitoring.",
+                "summary": "Blood-pressure condition + pain medicine may raise risk.",
                 "detail": (
                     f"Profile includes hypertension and NSAID medicine(s): {', '.join(nsaid_matches)}. "
-                    "Monitor blood pressure and discuss alternatives if readings worsen."
+                    "Track blood pressure closely and ask about safer alternatives if readings rise."
                 ),
                 "kind": "profile_hypertension",
             })
@@ -481,7 +767,11 @@ def check_safety_for_profile(medications, profile: dict | None = None):
     overdose_alerts = check_overdose_risks(medications)
     duplicate_and_sanity_alerts = check_double_dose_and_schedule_risks(medications)
     profile_alerts = check_profile_context_risks(medications, profile)
-    return interaction_alerts + overdose_alerts + duplicate_and_sanity_alerts + profile_alerts
+    lifestyle_alerts = check_food_and_alcohol_risks(medications, profile)
+    lab_alerts = check_lab_aware_risks(medications, profile)
+    combined_alerts = interaction_alerts + overdose_alerts + duplicate_and_sanity_alerts + profile_alerts + lifestyle_alerts + lab_alerts
+    pill_burden_alerts = check_pill_burden_optimizations(medications, combined_alerts)
+    return combined_alerts + pill_burden_alerts
 
 
 def _severity_rank(severity: str) -> int:
@@ -573,27 +863,42 @@ def _build_dynamic_recommendations(alerts: list[dict]) -> list[str]:
 
     if severities["High"] > 0:
         recommendations.append(
-            "At least one high-risk conflict was detected. Contact your pharmacist or prescriber before your next dose to confirm a safe plan."
+            "At least one high-risk issue was found. Before your next dose, contact your pharmacist or prescriber for a safe plan."
         )
 
     if kinds.get("duplicate_ingredient", 0) > 0 or kinds.get("duplicate_schedule", 0) > 0:
         recommendations.append(
-            "Potential duplicate therapy was found. Bring all medicine labels (including combination products) for a same-ingredient verification."
+            "Possible duplicate ingredient use was found. Bring all medicine labels (including combination products) to confirm you are not double-dosing."
         )
 
     if kinds.get("overdose", 0) > 0 or kinds.get("dose_sanity", 0) > 0:
         recommendations.append(
-            "Dose-related concerns were detected. Verify strength and frequency instructions with your care team before continuing unchanged."
+            "Dose concerns were found. Verify strength and timing instructions with your care team before continuing unchanged."
         )
 
     if kinds.get("class_overlap", 0) > 0:
         recommendations.append(
-            "Same-class overlap was detected. Ask whether both medicines are intended together or if one was meant to replace the other."
+            "Two medicines from the same class were found. Ask if both are intentional or if one was meant to replace the other."
+        )
+
+    if kinds.get("food_alcohol", 0) > 0 or kinds.get("food_grapefruit", 0) > 0 or kinds.get("food_dairy", 0) > 0:
+        recommendations.append(
+            "Food and drink timing matters here. Check alcohol, grapefruit, dairy, and calcium timing with a pharmacist before changing your routine."
+        )
+
+    if kinds.get("lab_egfr", 0) > 0 or kinds.get("lab_liver", 0) > 0 or kinds.get("lab_inr", 0) > 0 or kinds.get("lab_glucose", 0) > 0:
+        recommendations.append(
+            "Lab results are changing the risk picture. Use the latest kidney, liver, INR, and glucose numbers when reviewing these medicines."
+        )
+
+    if kinds.get("pill_burden_optimization", 0) > 0:
+        recommendations.append(
+            "Some medicines may be grouped safely to make the schedule easier. Confirm timing with your pharmacist before changing how you take them."
         )
 
     if any(kind.startswith("profile_") for kind in kinds):
         recommendations.append(
-            "Profile-linked risk factors were detected. Confirm this plan with your clinician using your age, condition, and organ-risk context."
+            "Profile-related risk factors were detected. Review this plan using your age, conditions, allergies, and kidney/liver status."
         )
 
     if not recommendations:

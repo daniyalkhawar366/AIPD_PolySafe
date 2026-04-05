@@ -8,6 +8,7 @@ const HistoryView = ({
   openPrescriptionFile,
   filePreviewLoading,
   setPendingDeleteRecordId,
+  setPrescriptionModalOpen,
 }) => (
   <motion.div key="history" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-5">
     <GlassCard className="p-5 lg:p-6 bg-linear-to-r from-slate-50 via-white to-indigo-50 border-indigo-100">
@@ -17,9 +18,17 @@ const HistoryView = ({
           <h2 className="text-2xl lg:text-3xl font-bold text-slate-900 mt-1">Prescriptions</h2>
           <p className="text-sm text-slate-600 mt-2">Review prior uploads, inspect extracted text, and reopen the original uploaded file.</p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-3 min-w-40">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Saved Records</p>
-          <p className="text-xl font-bold text-slate-900 mt-1">{savedPrescriptions.length}</p>
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-3 min-w-40">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Saved Records</p>
+            <p className="text-xl font-bold text-slate-900 mt-1">{savedPrescriptions.length}</p>
+          </div>
+          <button
+            onClick={() => setPrescriptionModalOpen(true)}
+            className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg font-semibold transition-all"
+          >
+            Upload Prescription
+          </button>
         </div>
       </div>
     </GlassCard>

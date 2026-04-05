@@ -146,6 +146,19 @@ const App = () => {
     allergies_text: '',
     kidney_disease: false,
     liver_disease: false,
+    smoking_status: 'unknown',
+    alcohol_use: 'unknown',
+    grapefruit_use: 'unknown',
+    dairy_use: 'unknown',
+    egfr: '',
+    alt_u_l: '',
+    ast_u_l: '',
+    inr: '',
+    glucose_mg_dl: '',
+    emergency_contact_name: '',
+    emergency_contact_phone: '',
+    emergency_notes: '',
+    care_team_patients: [],
     privacy_consent: false,
   });
   const [deleteAccountText, setDeleteAccountText] = useState('');
@@ -499,6 +512,19 @@ const App = () => {
         allergies_text: (existingProfile.allergies || []).join(', '),
         kidney_disease: Boolean(existingProfile.kidney_disease),
         liver_disease: Boolean(existingProfile.liver_disease),
+        smoking_status: existingProfile.smoking_status || 'unknown',
+        alcohol_use: existingProfile.alcohol_use || 'unknown',
+        grapefruit_use: existingProfile.grapefruit_use || 'unknown',
+        dairy_use: existingProfile.dairy_use || 'unknown',
+        egfr: existingProfile.egfr ? String(existingProfile.egfr) : '',
+        alt_u_l: existingProfile.alt_u_l ? String(existingProfile.alt_u_l) : '',
+        ast_u_l: existingProfile.ast_u_l ? String(existingProfile.ast_u_l) : '',
+        inr: existingProfile.inr ? String(existingProfile.inr) : '',
+        glucose_mg_dl: existingProfile.glucose_mg_dl ? String(existingProfile.glucose_mg_dl) : '',
+        emergency_contact_name: existingProfile.emergency_contact_name || '',
+        emergency_contact_phone: existingProfile.emergency_contact_phone || '',
+        emergency_notes: existingProfile.emergency_notes || '',
+        care_team_patients: Array.isArray(existingProfile.care_team_patients) ? existingProfile.care_team_patients : [],
         privacy_consent: Boolean(currentUser.privacy_consent),
       }));
       if (activeView === 'profile' && currentUser.profile_completed) {
@@ -861,6 +887,19 @@ const App = () => {
         allergies: parseCsvList(profileForm.allergies_text),
         kidney_disease: Boolean(profileForm.kidney_disease),
         liver_disease: Boolean(profileForm.liver_disease),
+        smoking_status: profileForm.smoking_status,
+        alcohol_use: profileForm.alcohol_use,
+        grapefruit_use: profileForm.grapefruit_use,
+        dairy_use: profileForm.dairy_use,
+        egfr: Number(profileForm.egfr || 0),
+        alt_u_l: Number(profileForm.alt_u_l || 0),
+        ast_u_l: Number(profileForm.ast_u_l || 0),
+        inr: Number(profileForm.inr || 0),
+        glucose_mg_dl: Number(profileForm.glucose_mg_dl || 0),
+        emergency_contact_name: profileForm.emergency_contact_name,
+        emergency_contact_phone: profileForm.emergency_contact_phone,
+        emergency_notes: profileForm.emergency_notes,
+        care_team_patients: profileForm.care_team_patients,
         privacy_consent: Boolean(profileForm.privacy_consent),
       };
 
@@ -1664,6 +1703,7 @@ const App = () => {
               openPrescriptionFile={openPrescriptionFile}
               filePreviewLoading={filePreviewLoading}
               setPendingDeleteRecordId={setPendingDeleteRecordId}
+              setPrescriptionModalOpen={setPrescriptionModalOpen}
             />
           ) : activeView === 'profile' ? (
             <ProfileView
