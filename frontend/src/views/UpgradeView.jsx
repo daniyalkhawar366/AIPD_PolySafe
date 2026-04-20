@@ -30,8 +30,9 @@ const UpgradeView = ({ GlassCard, entranceVariants, premiumPriceUsd, onBack, cur
     try {
       const token = localStorage.getItem('polysafe_token') || '';
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
       const res = await axios.post(
-        'http://localhost:8000/api/payments/create-checkout',
+        `${apiBase}/payments/create-checkout`,
         {},
         { withCredentials: true, headers }
       );

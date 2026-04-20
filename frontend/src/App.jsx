@@ -24,7 +24,7 @@ const GlassCard = ({ children, className = '' }) => (
   </div>
 );
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
 const TOKEN_KEY = 'polysafe_token';
 const SAVED_ACCOUNTS_KEY = 'polysafe_saved_accounts';
 const COOKIE_SESSION_TOKEN = '__cookie_session__';
