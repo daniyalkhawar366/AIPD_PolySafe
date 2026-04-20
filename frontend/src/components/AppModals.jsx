@@ -53,6 +53,7 @@ const AppModals = ({
   setPremiumModalOpen,
   premiumContext,
   premiumPriceUsd,
+  onOpenPaymentPage,
 }) => {
   const premiumMessages = {
     medicine_limit: {
@@ -230,6 +231,11 @@ const AppModals = ({
                       <div className="flex-1">
                         <p className="text-slate-900 font-bold text-lg">{drug.name}</p>
                         <p className="text-gray-500 text-xs uppercase tracking-tighter">{drug.valid ? 'Verified with RxNorm' : 'Unmatched name: review and confirm'}</p>
+                        {drug.duplicate_in_profile && (
+                          <p className="mt-1 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 inline-flex px-2 py-0.5 rounded-full">
+                            Already in profile - will be skipped
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-center">
@@ -240,6 +246,7 @@ const AppModals = ({
                           value={drug.draftName}
                           onChange={(e) => updateReviewedDrug(index, 'draftName', e.target.value)}
                           placeholder="Edit medicine name before saving"
+                          maxLength={200}
                         />
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <input
@@ -248,6 +255,7 @@ const AppModals = ({
                             value={drug.draftDose || ''}
                             onChange={(e) => updateReviewedDrug(index, 'draftDose', e.target.value)}
                             placeholder="Dose (e.g., 500mg)"
+                            maxLength={100}
                           />
                           <input
                             type="text"
@@ -255,14 +263,16 @@ const AppModals = ({
                             value={drug.draftFrequency || ''}
                             onChange={(e) => updateReviewedDrug(index, 'draftFrequency', e.target.value)}
                             placeholder="Frequency (e.g., BID)"
+                            maxLength={100}
                           />
                         </div>
                       </div>
                       <button
                         onClick={() => confirmDrug(drug)}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-3 rounded-xl font-bold transition-all inline-flex items-center justify-center gap-2"
+                        disabled={drug.duplicate_in_profile || drug.action === 'skip'}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-3 rounded-xl font-bold transition-all inline-flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Plus className="w-5 h-5" /> Add
+                        <Plus className="w-5 h-5" /> {drug.duplicate_in_profile || drug.action === 'skip' ? 'Skipped' : 'Add'}
                       </button>
                     </div>
                   </div>
@@ -307,14 +317,14 @@ const AppModals = ({
           >
             <h3 className="text-lg font-semibold text-slate-900">Update Medicine</h3>
             <div className="mt-3 space-y-2">
-              <input value={editMedName} onChange={(e) => setEditMedName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Medicine name" />
+              <input value={editMedName} onChange={(e) => setEditMedName(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Medicine name" maxLength={200} />
               <select value={editMedType} onChange={(e) => setEditMedType(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm">
                 <option>Prescription medicine</option>
                 <option>Over-the-counter (OTC)</option>
                 <option>Supplement / Vitamin</option>
               </select>
-              <input value={editMedDose} onChange={(e) => setEditMedDose(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Dose" />
-              <input value={editMedFrequency} onChange={(e) => setEditMedFrequency(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Frequency" />
+              <input value={editMedDose} onChange={(e) => setEditMedDose(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Dose" maxLength={100} />
+              <input value={editMedFrequency} onChange={(e) => setEditMedFrequency(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Frequency" maxLength={100} />
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setPendingEditMed(null)} disabled={updateMedLoading} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700">Cancel</button>
@@ -438,7 +448,10 @@ const AppModals = ({
                 Not now
               </button>
               <button
-                onClick={() => setPremiumModalOpen(false)}
+                onClick={() => {
+                  setPremiumModalOpen(false);
+                  if (onOpenPaymentPage) onOpenPaymentPage();
+                }}
                 className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500"
               >
                 Upgrade Now

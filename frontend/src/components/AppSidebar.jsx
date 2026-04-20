@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Activity, ChevronRight, LogOut, Menu, Shield, Upload, User } from 'lucide-react';
+import { Activity, ChevronRight, LogOut, Menu, Shield, Upload, User, Users } from 'lucide-react';
 
 const NavItem = ({
   icon: Icon,
@@ -32,12 +32,14 @@ const AppSidebar = ({
   currentUser,
   activeView,
   onNavigate,
-  onLogout,
+  onRequestLogout,
+  onOpenAccountSwitcher,
   medsLength,
   profileRequired,
   profileNudgeVisible,
 }) => {
-  const initials = (currentUser?.name || 'User')
+  const displayName = currentUser?.profile?.patient_name || currentUser?.name || 'User';
+  const initials = displayName
     .split(' ')
     .slice(0, 2)
     .map((part) => part[0])
@@ -59,12 +61,18 @@ const AppSidebar = ({
                 {initials}
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="text-slate-900 text-sm font-semibold leading-tight wrap-break-word">{currentUser?.name || 'User'}</h3>
+                <h3 className="text-slate-900 text-sm font-semibold leading-tight wrap-break-word">{displayName}</h3>
                 <p className="text-[11px] text-slate-500 mt-1 break-all leading-tight">{currentUser?.email || ''}</p>
               </div>
             </div>
             <button
-              onClick={onLogout}
+              onClick={onOpenAccountSwitcher}
+              className="w-full mb-2 text-xs text-indigo-600 hover:text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-50 transition-all font-medium inline-flex items-center justify-center gap-1"
+            >
+              <Users className="w-3.5 h-3.5" /> Switch Account
+            </button>
+            <button
+              onClick={onRequestLogout}
               className="w-full text-xs text-red-500 hover:text-red-600 border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-all font-medium"
             >
               Logout
@@ -76,7 +84,7 @@ const AppSidebar = ({
               {initials}
             </div>
             <button
-              onClick={onLogout}
+              onClick={onRequestLogout}
               className="p-2 hover:bg-red-50 rounded-lg text-red-500 hover:text-red-600 border border-red-200 transition-colors"
               aria-label="Logout"
               title="Logout"

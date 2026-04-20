@@ -31,6 +31,7 @@ const DashboardView = ({
   manualFrequency,
   setManualFrequency,
   manualSaving,
+  uploadStage,
 }) => {
   const highRiskCount = interactions.filter((inter) => inter.severity === 'High').length;
 
@@ -43,6 +44,14 @@ const DashboardView = ({
               <p className="text-[10px] font-semibold tracking-[0.15em] uppercase text-indigo-500">Care Control Center</p>
               <h2 className="text-xl lg:text-2xl font-bold text-slate-900 mt-1">Polypharmacy Safety Dashboard</h2>
               <p className="text-xs lg:text-sm text-slate-500 mt-1.5 max-w-2xl">Track prescriptions, OTC, and supplements with interaction and overdose screening.</p>
+              {uploadStage !== 'idle' && (
+                <p className="mt-2 inline-flex items-center rounded-full bg-indigo-50 border border-indigo-200 px-3 py-1 text-[11px] font-semibold text-indigo-700">
+                  {uploadStage === 'uploading' && 'Uploading prescription...'}
+                  {uploadStage === 'analyzing' && 'Analyzing prescription text...'}
+                  {uploadStage === 'reviewing' && 'Prescription ready for review.'}
+                  {uploadStage === 'completed' && 'Prescription processing complete.'}
+                </p>
+              )}
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
               <div className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 min-w-28 shadow-sm">
@@ -173,6 +182,8 @@ const DashboardView = ({
                   value={manualDrugName}
                   onChange={(e) => setManualDrugName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleManualAdd()}
+                  maxLength={200}
+                  autoComplete="off"
                 />
               </div>
               <div className="space-y-1">
@@ -183,6 +194,8 @@ const DashboardView = ({
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-300 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   value={manualDose}
                   onChange={(e) => setManualDose(e.target.value)}
+                  maxLength={100}
+                  autoComplete="off"
                 />
               </div>
               <div className="space-y-1">
@@ -194,6 +207,8 @@ const DashboardView = ({
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-300 outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   value={manualFrequency}
                   onChange={(e) => setManualFrequency(e.target.value)}
+                  maxLength={100}
+                  autoComplete="off"
                 />
                 <datalist id="frequency-options">
                   <option value="Twice daily" />

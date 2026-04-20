@@ -25,10 +25,18 @@ _load_env()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+GROQ_TIMEOUT_SECONDS = int(os.getenv("GROQ_TIMEOUT_SECONDS", "18"))
+GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "700"))
 
 # Google Gemini Vision — FALLBACK (free at https://aistudio.google.com/app/apikey)
 #   - 15 req/min free tier, 1500 req/day
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
+GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "25"))
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "1200"))
+
+OCR_MAX_DIM = int(os.getenv("OCR_MAX_DIM", "768"))
+OCR_JPEG_QUALITY = int(os.getenv("OCR_JPEG_QUALITY", "72"))
+OCR_PDF_DPI = int(os.getenv("OCR_PDF_DPI", "130"))
 
 # Gemini models (in fallback order)
 GEMINI_MODELS = [
@@ -42,15 +50,19 @@ Analyze this prescription image (handwritten OR printed) and return ONLY this JS
   "is_prescription": true,
   "raw_text": "<only the medicine/drug lines from the prescription, not patient or doctor info>",
   "drugs": [
-    {"name": "Full Drug Name", "dose": "500mg", "frequency": "once a day"}
+                {"name": "Full Drug Name", "dose": "500mg", "frequency": "once a day", "instructions": "take with food", "source_line": "Betalos 100mg - 1 tab BID", "confidence": 0.92}
   ]
 }
 Rules:
 - drugs: list every medication. Each entry is ONE drug name only.
 - Expand abbreviations: FeSO4→Ferrous Sulfate, AA→Ascorbic Acid, APAP→Acetaminophen, ASA→Aspirin, HCTZ→Hydrochlorothiazide
-- Lines starting with Sig:, A.D., BID, TID, QID, PRN, or a dosage like 100mg are INSTRUCTIONS — exclude from drugs list
+- Lines starting with Sig:, A.D., BID, TID, QID, QOD, QHS, HS, PRN, or a dosage like 100mg are INSTRUCTIONS — exclude from drugs list
 - A dosage line (e.g. "100mg tab") directly below a drug name belongs to THAT drug as its dose field
 - raw_text: include only the medication section (drug names, doses, frequencies) — skip patient name, address, doctor info
+- For each drug object, set source_line to the exact medication row that belongs to that medicine. Do not merge instructions from another row.
+- If the prescription uses shorthand, normalize it in frequency per row: BID=twice daily, TID=thrice daily, QID=four times daily, QD/OD/DAILY=once daily, QOD=every other day, HS/QHS=at bedtime, PRN=as needed.
+- If a medicine line lacks a frequency, infer it only from that row's source_line or the immediately adjacent instructions for that same medicine.
+- Capture extra directions such as "take with food", "before meals", or "avoid alcohol" in instructions.
 - CRITICAL: Ensure the JSON is completely valid. Any newlines inside the raw_text string must be escaped as \\n.
 - Be concise. Do not include explanations.
 """
@@ -69,7 +81,7 @@ def _prepare_image(file_path: str) -> tuple:
     if file_path.lower().endswith(".pdf"):
         try:
             from pdf2image import convert_from_path
-            pages = convert_from_path(file_path, dpi=150, first_page=1, last_page=1)
+            pages = convert_from_path(file_path, dpi=OCR_PDF_DPI, first_page=1, last_page=1)
             img = pages[0]
         except Exception as e:
             print(f"[OCR] PDF conversion failed: {e}")
@@ -86,7 +98,7 @@ def _prepare_image(file_path: str) -> tuple:
         img = img.convert("RGB")
 
     # Resize: cap longest side at 800px — enough for text, much smaller payload
-    MAX_DIM = 800
+    MAX_DIM = OCR_MAX_DIM
     w, h = img.size
     scale = min(MAX_DIM / w, MAX_DIM / h, 1.0)  # never upscale
     if scale < 1.0:
@@ -95,7 +107,7 @@ def _prepare_image(file_path: str) -> tuple:
 
     # Compress to JPEG at 80% quality
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=80, optimize=True)
+    img.save(buf, format="JPEG", quality=OCR_JPEG_QUALITY, optimize=True)
     size_kb = buf.tell() / 1024
     print(f"[OCR] Compressed image size: {size_kb:.1f} KB")
 
@@ -129,7 +141,7 @@ def _call_groq(img_b64: str, mime: str) -> dict:
             }
         ],
         "temperature": 0.1,
-        "max_completion_tokens": 1200,
+        "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS,
         "response_format": {"type": "json_object"},
     }
 
@@ -138,7 +150,7 @@ def _call_groq(img_b64: str, mime: str) -> dict:
 
     for attempt in range(2):
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=30)
+            resp = requests.post(url, json=payload, headers=headers, timeout=GROQ_TIMEOUT_SECONDS)
 
             if resp.status_code in (401, 403):
                 raise ValueError(
@@ -220,7 +232,7 @@ def _call_gemini(img_b64: str, mime: str) -> dict:
                 ]
             }
         ],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 2000},
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS},
     }
 
     last_error = None
@@ -231,7 +243,7 @@ def _call_gemini(img_b64: str, mime: str) -> dict:
         )
         for attempt in range(3):
             try:
-                resp = requests.post(url, json=payload, timeout=60)
+                resp = requests.post(url, json=payload, timeout=GEMINI_TIMEOUT_SECONDS)
 
                 if resp.status_code in (401, 403):
                     raise ValueError(
@@ -277,33 +289,56 @@ def _call_gemini(img_b64: str, mime: str) -> dict:
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
-def _call_vision(file_path: str) -> dict:
+def _call_vision(file_path: str) -> tuple[dict, dict]:
     """
     Call Vision API: try Groq (primary), fall back to Gemini.
     Raises RuntimeError with a clear message if all fail.
     """
+    started_at = time.perf_counter()
+    prep_started_at = time.perf_counter()
     img_b64, mime = _prepare_image(file_path)
+    prep_seconds = round(time.perf_counter() - prep_started_at, 3)
     if not img_b64:
         raise ValueError("Could not read the uploaded file. Please upload a JPG, PNG, or PDF.")
+
+    timing_meta = {
+        "image_prepare_seconds": prep_seconds,
+    }
 
     last_error = None
 
     # Try Groq first (primary)
     if GROQ_API_KEY:
+        groq_started_at = time.perf_counter()
         try:
-            return _call_groq(img_b64, mime)
+            result = _call_groq(img_b64, mime)
+            timing_meta.update({
+                "provider": "groq",
+                "provider_seconds": round(time.perf_counter() - groq_started_at, 3),
+                "total_vision_seconds": round(time.perf_counter() - started_at, 3),
+            })
+            return result, timing_meta
         except Exception as e:
             last_error = f"Groq failed: {e}"
+            timing_meta["groq_seconds"] = round(time.perf_counter() - groq_started_at, 3)
             print(f"[OCR] {last_error}, trying Gemini fallback...")
     else:
         print(f"[OCR] GROQ_API_KEY not set, trying Gemini fallback...")
 
     # Fall back to Gemini
     if GEMINI_API_KEY:
+        gemini_started_at = time.perf_counter()
         try:
-            return _call_gemini(img_b64, mime)
+            result = _call_gemini(img_b64, mime)
+            timing_meta.update({
+                "provider": "gemini",
+                "provider_seconds": round(time.perf_counter() - gemini_started_at, 3),
+                "total_vision_seconds": round(time.perf_counter() - started_at, 3),
+            })
+            return result, timing_meta
         except Exception as e:
             last_error = f"Gemini fallback failed: {e}"
+            timing_meta["gemini_seconds"] = round(time.perf_counter() - gemini_started_at, 3)
             raise RuntimeError(last_error)
     else:
         raise ValueError(
@@ -315,7 +350,7 @@ def _call_vision(file_path: str) -> dict:
 
 def extract_text(file_path: str) -> str:
     """Run vision OCR on the prescription. Returns raw text string."""
-    result = _call_vision(file_path)
+    result, _ = _call_vision(file_path)
     return result.get("raw_text", "")
 
 
@@ -327,6 +362,49 @@ def classify_prescription_zero_shot(text: str):
                  "refill", "sig", "disp", "bid", "tid", "qid", "prn"]
     has = any(k in text.lower() for k in keywords)
     return ("medical prescription", 0.85) if has else ("not medical prescription", 0.55)
+
+
+def _normalize_frequency_text(raw_frequency: str, source_line: str = "") -> str:
+    """Normalize common prescription shorthand into a user-friendly schedule."""
+    text = str(raw_frequency or "").strip().lower()
+    context = str(source_line or "").strip().lower()
+    combined = f"{text} {context}".strip()
+
+    if not combined:
+        return ""
+
+    if any(token in combined for token in ["every other day", "qod", "alternate day", "alt day"]):
+        return "every other day"
+    if any(token in combined for token in ["qid", "four times daily", "4 times a day", "four times a day"]):
+        return "four times daily"
+    if any(token in combined for token in ["tid", "three times daily", "3 times a day", "three times a day", "thrice daily"]):
+        return "thrice daily"
+    if any(token in combined for token in ["bid", "twice daily", "2 times a day", "twice a day"]):
+        return "twice daily"
+    if any(token in combined for token in ["qd", "od", "daily", "once daily", "once a day", "every day"]):
+        return "once daily"
+    if any(token in combined for token in ["hs", "qhs", "bedtime", "at bedtime", "nightly"]):
+        return "at bedtime"
+    if "prn" in combined or "as needed" in combined:
+        return "as needed"
+
+    every_hours = re.search(r"every\s*(\d+)\s*hour", combined)
+    if every_hours:
+        hours = every_hours.group(1)
+        return f"every {hours} hours"
+
+    numeric = re.search(r"(?:x\s*)?(\d+(?:\.\d+)?)\s*(?:times?|x)\s*(?:per\s*)?(?:day|daily|d)", combined)
+    if numeric:
+        count = numeric.group(1)
+        if count == "3":
+            return "thrice daily"
+        if count == "4":
+            return "four times daily"
+        if count == "2":
+            return "twice daily"
+        return f"{count} times daily"
+
+    return str(raw_frequency or "").strip()
 
 
 # Common pharmaceutical abbreviations the model may leave unexpanded
@@ -419,7 +497,9 @@ def process_prescription(file_path: str) -> dict:
 
     Raises RuntimeError/ValueError with clear messages on failure.
     """
-    result = _call_vision(file_path)
+    started_at = time.perf_counter()
+    result, vision_timing = _call_vision(file_path)
+    post_started_at = time.perf_counter()
 
     raw_text = result.get("raw_text", "")
     is_prescription = result.get("is_prescription", False)
@@ -443,11 +523,16 @@ def process_prescription(file_path: str) -> dict:
         normalized_name = _expand_abbreviation(row.get("name", ""))[0]
         if not normalized_name:
             continue
+        source_line = str(row.get("source_line", "")).strip()
+        row_frequency = _normalize_frequency_text(row.get("frequency", ""), source_line)
         drug_details.append(
             {
                 "name": normalized_name,
                 "dose": str(row.get("dose", "")).strip(),
-                "frequency": str(row.get("frequency", "")).strip(),
+                "frequency": row_frequency,
+                "instructions": str(row.get("instructions", "")).strip(),
+                "source_line": source_line,
+                "confidence": float(row.get("confidence", 0.0) or 0.0),
             }
         )
 
@@ -470,10 +555,18 @@ def process_prescription(file_path: str) -> dict:
         if fallback_label == "medical prescription":
             label, confidence = fallback_label, fallback_conf
 
-    return {
+    payload = {
         "text": raw_text,
         "label": label,
         "confidence": confidence,
         "drugs": drugs,
         "drug_details": drug_details,
     }
+
+    payload["timings"] = {
+        **vision_timing,
+        "postprocess_seconds": round(time.perf_counter() - post_started_at, 3),
+        "total_ocr_seconds": round(time.perf_counter() - started_at, 3),
+    }
+
+    return payload

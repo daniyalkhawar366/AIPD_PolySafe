@@ -5,11 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 import shutil
 import os
+import re
+import threading
+import time
 import uuid
 import random
 import secrets
 import smtplib
 from typing import Any
+from zoneinfo import ZoneInfo
 from pydantic import BaseModel, EmailStr, Field
 import bcrypt
 from jose import JWTError, jwt
@@ -71,6 +75,7 @@ users_collection = None
 medications_collection = None
 prescriptions_collection = None
 share_links_collection = None
+reminders_collection = None
 if MONGO_URI:
     try:
         mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=4000)
@@ -79,6 +84,7 @@ if MONGO_URI:
         medications_collection = mongo_db["medications"]
         prescriptions_collection = mongo_db["prescriptions"]
         share_links_collection = mongo_db["share_links"]
+        reminders_collection = mongo_db["reminders"]
         users_collection.create_index("email", unique=True)
         medications_collection.create_index([("user_id", 1), ("rxcui", 1)])
         medications_collection.create_index([("user_id", 1), ("drug_name", 1)])
@@ -86,11 +92,14 @@ if MONGO_URI:
         share_links_collection.create_index([("token", 1)], unique=True)
         share_links_collection.create_index([("owner_user_id", 1), ("created_at", -1)])
         share_links_collection.create_index([("expires_at", 1)])
+        reminders_collection.create_index([("user_id", 1), ("profile_id", 1)], unique=True)
+        reminders_collection.create_index([("enabled", 1), ("next_send_at", 1)])
     except PyMongoError:
         users_collection = None
         medications_collection = None
         prescriptions_collection = None
         share_links_collection = None
+        reminders_collection = None
 
 # Enable CORS for React
 app.add_middleware(
@@ -105,44 +114,44 @@ UPLOAD_DIR = "uploaded_files"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 class DrugAction(BaseModel):
-    user_id: str = ""
-    drug_name: str
-    rxcui: str
-    source: str = "Manual Entry"
-    dose: str = ""
-    frequency: str = ""
-    dose_mg: float = 0.0
-    frequency_per_day: float = 0.0
-    prescription_file_name: str = ""
+    user_id: str = Field(default="", max_length=128)
+    drug_name: str = Field(min_length=2, max_length=200)
+    rxcui: str = Field(default="N/A", max_length=50)
+    source: str = Field(default="Manual Entry", max_length=80)
+    dose: str = Field(default="", max_length=100)
+    frequency: str = Field(default="", max_length=100)
+    dose_mg: float = Field(default=0.0, ge=0.0, le=100000.0)
+    frequency_per_day: float = Field(default=0.0, ge=0.0, le=24.0)
+    prescription_file_name: str = Field(default="", max_length=255)
 
 
 class PrescriptionAction(BaseModel):
-    raw_text: str
-    confidence: float = 0.0
-    uploaded_file_name: str = ""
+    raw_text: str = Field(min_length=1, max_length=20000)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    uploaded_file_name: str = Field(default="", max_length=255)
 
 
 class MedicationUpdateAction(BaseModel):
-    drug_name: str
-    source: str = ""
-    dose: str = ""
-    frequency: str = ""
+    drug_name: str = Field(min_length=2, max_length=200)
+    source: str = Field(default="", max_length=80)
+    dose: str = Field(default="", max_length=100)
+    frequency: str = Field(default="", max_length=100)
 
 
 class RegisterAction(BaseModel):
-    name: str
+    name: str = Field(min_length=2, max_length=120)
     email: EmailStr
-    password: str
-    role: str = "patient"
+    password: str = Field(min_length=8, max_length=128)
+    role: str = Field(default="patient", max_length=20)
 
 
 class LoginAction(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class GoogleAuthAction(BaseModel):
-    idToken: str
+    idToken: str = Field(min_length=20, max_length=4096)
 
 
 class ForgotPasswordAction(BaseModel):
@@ -151,62 +160,91 @@ class ForgotPasswordAction(BaseModel):
 
 class VerifyResetAction(BaseModel):
     email: EmailStr
-    code: str
+    code: str = Field(min_length=6, max_length=6)
 
 
 class ResetPasswordAction(BaseModel):
     email: EmailStr
-    code: str
-    new_password: str
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class UserProfileAction(BaseModel):
-    patient_name: str = ""
-    patient_email: str = ""
-    age: int
-    sex_at_birth: str = ""
-    gender_identity: str = ""
-    weight_kg: float = 0.0
-    height_cm: float = 0.0
+    patient_name: str = Field(default="", max_length=120)
+    patient_email: str = Field(default="", max_length=120)
+    age: int = Field(ge=0, le=120)
+    sex_at_birth: str = Field(default="", max_length=40)
+    gender_identity: str = Field(default="", max_length=60)
+    weight_kg: float = Field(default=0.0, ge=0.0, le=400.0)
+    height_cm: float = Field(default=0.0, ge=0.0, le=260.0)
     chronic_conditions: list[str] = Field(default_factory=list)
     allergies: list[str] = Field(default_factory=list)
     kidney_disease: bool = False
     liver_disease: bool = False
-    smoking_status: str = "unknown"
-    alcohol_use: str = "unknown"
-    grapefruit_use: str = "unknown"
-    dairy_use: str = "unknown"
-    egfr: float = 0.0
-    alt_u_l: float = 0.0
-    ast_u_l: float = 0.0
-    inr: float = 0.0
-    glucose_mg_dl: float = 0.0
-    emergency_contact_name: str = ""
-    emergency_contact_phone: str = ""
-    emergency_notes: str = ""
+    smoking_status: str = Field(default="unknown", max_length=40)
+    alcohol_use: str = Field(default="unknown", max_length=40)
+    grapefruit_use: str = Field(default="unknown", max_length=40)
+    dairy_use: str = Field(default="unknown", max_length=40)
+    egfr: float = Field(default=0.0, ge=0.0, le=300.0)
+    alt_u_l: float = Field(default=0.0, ge=0.0, le=5000.0)
+    ast_u_l: float = Field(default=0.0, ge=0.0, le=5000.0)
+    inr: float = Field(default=0.0, ge=0.0, le=20.0)
+    glucose_mg_dl: float = Field(default=0.0, ge=0.0, le=2000.0)
+    emergency_contact_name: str = Field(default="", max_length=120)
+    emergency_contact_phone: str = Field(default="", max_length=40)
+    emergency_notes: str = Field(default="", max_length=500)
     care_team_patients: list[dict[str, Any]] = Field(default_factory=list)
     privacy_consent: bool = False
 
 
 class ProfileCreateAction(BaseModel):
-    name: str = ""
-    email: str = ""
+    name: str = Field(default="", max_length=80)
+    email: str = Field(default="", max_length=120)
 
 
 class ShareLinkAction(BaseModel):
-    purpose: str = "consultation"
-    expires_hours: int = 24
+    purpose: str = Field(default="consultation", max_length=30)
+    expires_hours: int = Field(default=24, ge=1, le=168)
+
+
+class ReminderSettingsAction(BaseModel):
+    enabled: bool = False
+    recipient_email: str = Field(default="", max_length=120)
+    reminder_time: str = Field(default="09:00", min_length=5, max_length=5)
+    timezone: str = Field(default="UTC", max_length=80)
+    notes: str = Field(default="", max_length=500)
 
 
 class DeleteAccountAction(BaseModel):
-    confirm_text: str
+    confirm_text: str = Field(min_length=6, max_length=12)
     confirm_email: EmailStr
 
 
 ALLOWED_ROLES = {"patient", "caregiver"}
+ALLOWED_UPLOAD_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "application/pdf",
+}
+MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_PROFILE_ID = "default"
 PREMIUM_EMAIL_WHITELIST = {
     "daniyalkhawar3@gmail.com",
+}
+
+GENERIC_DUPLICATE_ALIASES = {
+    "acetaminophen": {"acetaminophen", "paracetamol", "apap"},
+    "ibuprofen": {"ibuprofen"},
+    "aspirin": {"aspirin", "asa"},
+    "naproxen": {"naproxen"},
+    "diclofenac": {"diclofenac"},
+    "metformin": {"metformin"},
+    "amlodipine": {"amlodipine"},
+    "atorvastatin": {"atorvastatin"},
+    "lisinopril": {"lisinopril"},
+    "losartan": {"losartan"},
+    "simvastatin": {"simvastatin"},
 }
 
 
@@ -335,11 +373,90 @@ def _normalize_role(role: str | None) -> str:
     return normalized
 
 
+def _validate_password_strength(password: str, *, field_name: str = "password"):
+    value = str(password or "")
+    if len(value) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} must be at least {MIN_PASSWORD_LENGTH} characters")
+    if len(value) > 128:
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} must be 128 characters or less")
+
+
+def _validate_reset_code(code: str):
+    normalized = str(code or "").strip()
+    if not re.fullmatch(r"\d{6}", normalized):
+        raise HTTPException(status_code=400, detail="Reset code must be a 6-digit numeric code")
+
+
+def _validate_upload_file(file: UploadFile):
+    content_type = str(file.content_type or "").lower().strip()
+    if content_type and content_type not in ALLOWED_UPLOAD_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Only PNG, JPG, JPEG, and PDF files are allowed")
+
+
+def _validate_file_size(file_path: str):
+    try:
+        size_bytes = os.path.getsize(file_path)
+    except OSError:
+        raise HTTPException(status_code=400, detail="Could not read uploaded file size")
+    if size_bytes > MAX_UPLOAD_FILE_BYTES:
+        raise HTTPException(status_code=400, detail="File size must be 10MB or less")
+
+
+def _validate_person_name(name: str, *, field_name: str = "name", required: bool = True, max_length: int = 120) -> str:
+    normalized = str(name or "").strip()
+    if required and not normalized:
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} is required")
+    if not normalized:
+        return ""
+    if len(normalized) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} must be {max_length} characters or less")
+    if re.search(r"\d", normalized):
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} cannot include numbers")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z\s'\-.]*", normalized):
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} contains invalid characters")
+    return normalized
+
+
+def _validate_medication_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Drug name is required")
+    if len(normalized) > 200:
+        raise HTTPException(status_code=400, detail="Drug name must be 200 characters or less")
+    if re.search(r"\d", normalized):
+        raise HTTPException(status_code=400, detail="Drug name cannot include numbers")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z\s'().\-]*", normalized):
+        raise HTTPException(status_code=400, detail="Drug name contains invalid characters")
+    return normalized
+
+
+def _validate_descriptor_text(value: str, *, field_name: str = "entry") -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if re.search(r"(^|\s)-\s*\d", normalized) or re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} cannot be a negative or numeric-only value")
+    if not re.search(r"[A-Za-z]", normalized):
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} must contain descriptive text")
+    return normalized
+
+
+def _validate_non_negative_med_text(value: str, *, field_name: str, max_length: int) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if len(normalized) > max_length:
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} must be {max_length} characters or less")
+    if re.search(r"(^|[\s(])-\s*\d", normalized):
+        raise HTTPException(status_code=400, detail=f"{field_name.capitalize()} cannot contain negative values")
+    return normalized
+
+
 def _sanitize_string_list(values: list[str]) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
     for value in values or []:
-        item = str(value or "").strip()
+        item = _validate_descriptor_text(value, field_name="profile list entry")
         key = item.lower()
         if not item or key in seen:
             continue
@@ -354,10 +471,12 @@ def _sanitize_care_team_patients(values: list[dict[str, Any]] | None) -> list[di
     for value in values or []:
         if not isinstance(value, dict):
             continue
-        name = str(value.get("name") or "").strip()[:120]
+        name = _validate_person_name(value.get("name") or "", field_name="care team patient name", required=bool(str(value.get("email") or "").strip()), max_length=120)
         email = str(value.get("email") or "").strip().lower()[:120]
         relationship = str(value.get("relationship") or "").strip()[:60]
         notes = str(value.get("notes") or "").strip()[:300]
+        if email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            raise HTTPException(status_code=400, detail="Care team patient email must be valid")
         if not name and not email:
             continue
         if email and email in seen_emails:
@@ -371,6 +490,16 @@ def _sanitize_care_team_patients(values: list[dict[str, Any]] | None) -> list[di
             "notes": notes,
         })
     return cleaned[:20]
+
+
+def _normalize_medication_duplicate_key(name: str) -> str:
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return ""
+    for canonical, aliases in GENERIC_DUPLICATE_ALIASES.items():
+        if any(alias in lowered for alias in aliases):
+            return canonical
+    return lowered
 
 
 def _create_access_token(subject: str) -> str:
@@ -403,6 +532,14 @@ def _require_users_collection():
 
 def _require_data_collections():
     if medications_collection is None or prescriptions_collection is None or share_links_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
+        )
+
+
+def _require_reminders_collection():
+    if reminders_collection is None:
         raise HTTPException(
             status_code=503,
             detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
@@ -457,6 +594,194 @@ def _send_email_code(to_email: str, subject: str, body: str, html_body: str | No
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as smtp:
         smtp.login(EMAIL_USER, EMAIL_PASS)
         smtp.send_message(msg)
+
+
+def _parse_reminder_time(raw_time: str) -> tuple[int, int]:
+    normalized = str(raw_time or "").strip()
+    try:
+        parsed = datetime.strptime(normalized, "%H:%M")
+    except ValueError as exc:
+        raise ValueError("Reminder time must use 24-hour HH:MM format") from exc
+    return parsed.hour, parsed.minute
+
+
+def _resolve_timezone(zone_name: str | None) -> ZoneInfo:
+    candidate = str(zone_name or "UTC").strip() or "UTC"
+    try:
+        return ZoneInfo(candidate)
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _next_reminder_send_at(reminder_doc: dict[str, Any], from_dt: datetime | None = None) -> datetime:
+    zone = _resolve_timezone(reminder_doc.get("timezone"))
+    hour, minute = _parse_reminder_time(reminder_doc.get("reminder_time") or "09:00")
+    now_utc = from_dt or datetime.now(timezone.utc)
+    local_now = now_utc.astimezone(zone)
+    scheduled_local = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if scheduled_local <= local_now:
+        scheduled_local = scheduled_local + timedelta(days=1)
+    return scheduled_local.astimezone(timezone.utc)
+
+
+def _reminder_recipient_email(user_doc: dict[str, Any], reminder_doc: dict[str, Any]) -> str:
+    recipient = str(reminder_doc.get("recipient_email") or "").strip().lower()
+    if recipient:
+        return recipient
+    return str(user_doc.get("email") or "").strip().lower()
+
+
+def _reminder_subject(user_doc: dict[str, Any], reminder_doc: dict[str, Any]) -> str:
+    profiles, active_profile, _, _ = _normalize_profiles_state(user_doc)
+    profile_label = str(active_profile.get("name") or active_profile.get("profile", {}).get("patient_name") or user_doc.get("name") or "your profile").strip()
+    return f"PolySafe reminder for {profile_label}"
+
+
+def _reminder_body(user_doc: dict[str, Any], reminder_doc: dict[str, Any], meds: list[dict[str, Any]]) -> tuple[str, str]:
+    profiles, active_profile, _, _ = _normalize_profiles_state(user_doc)
+    profile_label = str(active_profile.get("name") or active_profile.get("profile", {}).get("patient_name") or user_doc.get("name") or "your profile").strip()
+    reminder_time = str(reminder_doc.get("reminder_time") or "09:00").strip()
+    notes = str(reminder_doc.get("notes") or "").strip()
+    enabled_text = "enabled" if reminder_doc.get("enabled") else "disabled"
+    lines = [
+        f"Hello {user_doc.get('name') or 'there'},",
+        "",
+        f"This is your PolySafe medication reminder for {profile_label}.",
+        f"Reminder time: {reminder_time} ({enabled_text})",
+        "",
+        "Current medications:",
+    ]
+
+    html_rows = []
+    if meds:
+        for med in meds:
+            med_name = str(med.get("name") or "Unnamed medicine").strip()
+            dose = str(med.get("dose") or "Dose not set").strip()
+            frequency = str(med.get("frequency") or "Frequency not set").strip()
+            source = str(med.get("source") or "Medication").strip()
+            lines.append(f"- {med_name} | {dose} | {frequency} | {source}")
+            html_rows.append(
+                f"<li><strong>{med_name}</strong> - {dose} - {frequency} - {source}</li>"
+            )
+    else:
+        lines.append("- No medications are currently saved for this profile.")
+        html_rows.append("<li>No medications are currently saved for this profile.</li>")
+
+    if notes:
+        lines.extend(["", f"Notes: {notes}"])
+
+    lines.extend([
+        "",
+        "Open PolySafe to review doses and safety warnings.",
+        "",
+        "If you no longer want reminders, you can turn them off from the dashboard.",
+    ])
+
+    html_body = f"""
+        <div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.6;">
+          <p>Hello {user_doc.get('name') or 'there'},</p>
+          <p>This is your PolySafe medication reminder for <strong>{profile_label}</strong>.</p>
+          <p><strong>Reminder time:</strong> {reminder_time}</p>
+          <ul>{''.join(html_rows)}</ul>
+          {f'<p><strong>Notes:</strong> {notes}</p>' if notes else ''}
+          <p>Open PolySafe to review doses and safety warnings.</p>
+          <p style="color:#475569;">If you no longer want reminders, you can turn them off from the dashboard.</p>
+        </div>
+    """.strip()
+
+    return "\n".join(lines), html_body
+
+
+def _send_reminder_email(user_doc: dict[str, Any], reminder_doc: dict[str, Any], meds: list[dict[str, Any]]):
+    recipient_email = _reminder_recipient_email(user_doc, reminder_doc)
+    if not recipient_email:
+        return False
+
+    subject = _reminder_subject(user_doc, reminder_doc)
+    body, html_body = _reminder_body(user_doc, reminder_doc, meds)
+    _send_email_code(recipient_email, subject, body, html_body)
+    return True
+
+
+def _start_next_reminder_send_at(reminder_doc: dict[str, Any]) -> datetime:
+    try:
+        return _next_reminder_send_at(reminder_doc)
+    except ValueError:
+        return datetime.now(timezone.utc) + timedelta(days=1)
+
+
+def _reminder_scheduler_loop():
+    while True:
+        try:
+            if reminders_collection is None or users_collection is None or medications_collection is None:
+                time.sleep(60)
+                continue
+
+            now_utc = datetime.now(timezone.utc)
+            due_query = {
+                "enabled": True,
+                "next_send_at": {"$lte": now_utc},
+            }
+            for reminder_doc in reminders_collection.find(due_query):
+                user_id = reminder_doc.get("user_id")
+                profile_id = reminder_doc.get("profile_id") or DEFAULT_PROFILE_ID
+                if not user_id:
+                    continue
+
+                user_doc = users_collection.find_one({"_id": ObjectId(user_id)})
+                if not user_doc:
+                    continue
+
+                try:
+                    local_zone = _resolve_timezone(reminder_doc.get("timezone"))
+                    scheduled_local = now_utc.astimezone(local_zone)
+                    slot_key = f"{scheduled_local.date().isoformat()}|{str(reminder_doc.get('reminder_time') or '09:00').strip()}|{profile_id}"
+                except Exception:
+                    slot_key = f"{now_utc.date().isoformat()}|{str(reminder_doc.get('reminder_time') or '09:00').strip()}|{profile_id}"
+
+                if str(reminder_doc.get("last_sent_key") or "") == slot_key:
+                    reminders_collection.update_one(
+                        {"_id": reminder_doc["_id"]},
+                        {
+                            "$set": {
+                                "next_send_at": _start_next_reminder_send_at(reminder_doc),
+                                "updated_at": now_utc,
+                            }
+                        },
+                    )
+                    continue
+
+                meds = _get_mongo_medications(str(user_id), str(profile_id))
+                if _send_reminder_email(user_doc, reminder_doc, meds):
+                    reminders_collection.update_one(
+                        {"_id": reminder_doc["_id"]},
+                        {
+                            "$set": {
+                                "last_sent_key": slot_key,
+                                "last_sent_at": now_utc,
+                                "next_send_at": _start_next_reminder_send_at(reminder_doc),
+                                "updated_at": now_utc,
+                            }
+                        },
+                    )
+        except Exception as exc:
+            print(f"[REMINDER] scheduler error: {exc}")
+
+        time.sleep(60)
+
+
+_reminder_thread_started = False
+
+
+def _ensure_reminder_scheduler_started():
+    global _reminder_thread_started
+    if _reminder_thread_started:
+        return
+    if reminders_collection is None:
+        return
+    worker = threading.Thread(target=_reminder_scheduler_loop, daemon=True)
+    worker.start()
+    _reminder_thread_started = True
 
 
 def _set_auth_cookie(response: JSONResponse, token: str):
@@ -567,31 +892,41 @@ def _require_profile_completed(user_doc: dict[str, Any]):
 
 
 def _infer_frequency_from_text(raw_text: str, frequency: str) -> str:
-    normalized_frequency = (frequency or "").strip()
-    if normalized_frequency:
-        return normalized_frequency
+    normalized_frequency = (frequency or "").strip().lower()
+    if not normalized_frequency:
+        return ""
 
-    text = (raw_text or "").lower()
-    if "once daily" in text or "daily" in text or "qd" in text:
-        return "once daily"
-    if "twice daily" in text or "bid" in text:
+    if normalized_frequency in {"tid", "three times daily", "3 times daily", "3x daily", "3 times a day", "thrice daily"}:
+        return "thrice daily"
+    if normalized_frequency in {"bid", "twice daily", "2 times daily", "2x daily", "2 times a day"}:
         return "twice daily"
-    if "three times daily" in text or "tid" in text:
-        return "three times daily"
-    if "four times daily" in text or "qid" in text:
+    if normalized_frequency in {"qd", "od", "once daily", "daily", "once a day", "every day"}:
+        return "once daily"
+    if normalized_frequency in {"qid", "four times daily", "4 times daily", "4x daily", "4 times a day"}:
         return "four times daily"
-    return ""
+    if normalized_frequency in {"qod", "every other day", "alternate day", "alt day"}:
+        return "every other day"
+    if normalized_frequency in {"hs", "qhs", "bedtime", "at bedtime", "nightly"}:
+        return "at bedtime"
+    if normalized_frequency in {"prn", "as needed"}:
+        return "as needed"
+
+    return normalized_frequency
 
 
 def _has_duplicate_med(existing: list[dict[str, Any]], drug_name: str, rxcui: str) -> bool:
     normalized_name = str(drug_name or "").strip().lower()
     normalized_rxcui = str(rxcui or "").strip().lower()
+    normalized_key = _normalize_medication_duplicate_key(drug_name)
     has_real_rxcui = normalized_rxcui not in {"", "n/a", "na", "none", "unknown"}
 
     for med in existing:
         med_name = str(med.get("name", "")).strip().lower()
         med_rxcui = str(med.get("rxcui", "")).strip().lower()
+        med_key = _normalize_medication_duplicate_key(med.get("name", ""))
         if normalized_name and med_name == normalized_name:
+            return True
+        if normalized_key and med_key and med_key == normalized_key:
             return True
         if has_real_rxcui and med_rxcui == normalized_rxcui:
             return True
@@ -634,16 +969,19 @@ def _add_mongo_medication(
     prescription_file_name: str = "",
 ):
     _require_data_collections()
+    validated_drug_name = _validate_medication_name(drug_name)
+    validated_dose = _validate_non_negative_med_text(dose, field_name="dose", max_length=100)
+    validated_frequency = _validate_non_negative_med_text(frequency, field_name="frequency", max_length=100)
     medications_collection.insert_one(
         {
             "user_id": user_id,
             "profile_id": str(profile_id or DEFAULT_PROFILE_ID),
-            "drug_name": drug_name,
+            "drug_name": validated_drug_name,
             "rxcui": rxcui,
             "date_added": datetime.now(timezone.utc).isoformat(),
             "source": source,
-            "dose": dose,
-            "frequency": frequency,
+            "dose": validated_dose,
+            "frequency": validated_frequency,
             "dose_mg": dose_mg,
             "frequency_per_day": frequency_per_day,
             "prescription_file_name": os.path.basename(prescription_file_name) if prescription_file_name else "",
@@ -676,13 +1014,11 @@ def _update_mongo_medication(user_id: str, profile_id: str, med_id: str, action:
         raise HTTPException(status_code=404, detail="Medication not found")
 
     update_doc = {
-        "drug_name": str(action.drug_name or "").strip(),
+        "drug_name": _validate_medication_name(action.drug_name),
         "source": str(action.source or existing.get("source", "API/React/Auth")).strip() or "API/React/Auth",
-        "dose": str(action.dose or "").strip(),
-        "frequency": str(action.frequency or "").strip(),
+        "dose": _validate_non_negative_med_text(action.dose or "", field_name="dose", max_length=100),
+        "frequency": _validate_non_negative_med_text(action.frequency or "", field_name="frequency", max_length=100),
     }
-    if not update_doc["drug_name"]:
-        raise HTTPException(status_code=400, detail="Drug name is required")
 
     medications_collection.update_one(target_filter, {"$set": update_doc})
 
@@ -718,7 +1054,14 @@ def _save_mongo_prescription(user_id: str, profile_id: str, raw_text: str, confi
     existing_filter.update(_profile_query(profile_id))
     already = prescriptions_collection.find_one(existing_filter)
     if already:
-        return {"status": "already_exists"}
+        return {
+            "status": "already_exists",
+            "warning": {
+                "type": "duplicate_prescription",
+                "message": "This prescription text is already saved in this profile.",
+                "existing_record_id": str(already.get("_id", "")),
+            },
+        }
 
     prescriptions_collection.insert_one(
         {
@@ -731,7 +1074,7 @@ def _save_mongo_prescription(user_id: str, profile_id: str, raw_text: str, confi
             "uploaded_file_name": os.path.basename(uploaded_file_name) if uploaded_file_name else "",
         }
     )
-    return {"status": "saved"}
+    return {"status": "saved", "warning": None}
 
 
 def _prescription_record_filter(user_scope_ids: list[str], profile_id: str | None, record_id: str) -> dict[str, Any]:
@@ -778,8 +1121,8 @@ def health():
 def register(payload: RegisterAction):
     _require_users_collection()
 
-    if len(payload.password) < MIN_PASSWORD_LENGTH:
-        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    _validate_password_strength(payload.password)
+    normalized_name = _validate_person_name(payload.name, field_name="name", required=True, max_length=120)
 
     email = payload.email.strip().lower()
     existing = users_collection.find_one({"email": email})
@@ -788,17 +1131,17 @@ def register(payload: RegisterAction):
 
     default_profile = {
         **_default_profile(),
-        "patient_name": payload.name.strip(),
+        "patient_name": normalized_name,
         "patient_email": email,
     }
     user_doc = {
-        "name": payload.name.strip(),
+        "name": normalized_name,
         "email": email,
         "password_hash": _hash_password(payload.password),
         "role": _normalize_role(payload.role),
         "is_premium": email in PREMIUM_EMAIL_WHITELIST,
         "profiles": [{
-            **_default_profile_entry(payload.name.strip()),
+            **_default_profile_entry(normalized_name),
             "profile": default_profile,
         }],
         "active_profile_id": DEFAULT_PROFILE_ID,
@@ -1019,6 +1362,8 @@ def forgot_password(payload: ForgotPasswordAction):
 def verify_reset(payload: VerifyResetAction):
     _require_users_collection()
 
+    _validate_reset_code(payload.code)
+
     email = payload.email.strip().lower()
     code = payload.code.strip()
     user_doc = users_collection.find_one({"email": email})
@@ -1045,8 +1390,8 @@ def verify_reset(payload: VerifyResetAction):
 def reset_password(payload: ResetPasswordAction):
     _require_users_collection()
 
-    if len(payload.new_password) < MIN_PASSWORD_LENGTH:
-        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    _validate_password_strength(payload.new_password, field_name="new password")
+    _validate_reset_code(payload.code)
 
     verify_reset(VerifyResetAction(email=payload.email, code=payload.code))
     email = payload.email.strip().lower()
@@ -1096,8 +1441,10 @@ def create_my_profile(action: ProfileCreateAction, current_user: dict[str, Any] 
     if not _user_is_premium(current_user) and len(profiles) >= 1:
         raise HTTPException(status_code=403, detail="Upgrade to Premium to add multiple profiles")
 
-    patient_name = str(action.name or "").strip()[:80]
+    patient_name = _validate_person_name(action.name or "", field_name="profile name", required=True, max_length=80)
     patient_email = str(action.email or "").strip().lower()[:120]
+    if patient_email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", patient_email):
+        raise HTTPException(status_code=400, detail="Profile email must be a valid email")
 
     profile_name = patient_name or "Unnamed Patient"
 
@@ -1166,18 +1513,16 @@ def activate_my_profile(profile_id: str, current_user: dict[str, Any] = Depends(
 def update_my_profile(action: UserProfileAction, current_user: dict[str, Any] = Depends(get_current_user)):
     _require_users_collection()
 
-    if action.age < 0 or action.age > 120:
-        raise HTTPException(status_code=400, detail="Age must be between 0 and 120")
-    if action.weight_kg < 0 or action.weight_kg > 400:
-        raise HTTPException(status_code=400, detail="Weight must be between 0 and 400 kg")
-    if action.height_cm < 0 or action.height_cm > 260:
-        raise HTTPException(status_code=400, detail="Height must be between 0 and 260 cm")
     if not action.privacy_consent:
         raise HTTPException(status_code=400, detail="Consent is required to continue")
+    patient_name = _validate_person_name(action.patient_name or "", field_name="patient name", required=True, max_length=120)
+    patient_email = str(action.patient_email or "").strip().lower()
+    if patient_email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", patient_email):
+        raise HTTPException(status_code=400, detail="Patient email must be a valid email")
 
     profile_doc = {
-        "patient_name": str(action.patient_name or "").strip()[:120],
-        "patient_email": str(action.patient_email or "").strip().lower()[:120],
+        "patient_name": patient_name,
+        "patient_email": patient_email[:120],
         "age": int(action.age),
         "sex_at_birth": str(action.sex_at_birth or "").strip()[:40],
         "gender_identity": str(action.gender_identity or "").strip()[:60],
@@ -1237,6 +1582,112 @@ def update_my_profile(action: UserProfileAction, current_user: dict[str, Any] = 
     return {
         "success": True,
         "user": _public_user_doc(refreshed_user),
+    }
+
+
+def _public_reminder_doc(reminder_doc: dict[str, Any], user_doc: dict[str, Any]) -> dict[str, Any]:
+    profiles, active_profile, _, _ = _normalize_profiles_state(user_doc)
+    profile_label = str(active_profile.get("name") or active_profile.get("profile", {}).get("patient_name") or user_doc.get("name") or "Profile").strip()
+    return {
+        "id": str(reminder_doc.get("_id", "")),
+        "user_id": str(reminder_doc.get("user_id", "")),
+        "profile_id": str(reminder_doc.get("profile_id", DEFAULT_PROFILE_ID)),
+        "profile_name": profile_label,
+        "enabled": bool(reminder_doc.get("enabled", False)),
+        "recipient_email": str(reminder_doc.get("recipient_email") or user_doc.get("email") or "").strip().lower(),
+        "reminder_time": str(reminder_doc.get("reminder_time") or "09:00"),
+        "timezone": str(reminder_doc.get("timezone") or "UTC"),
+        "notes": str(reminder_doc.get("notes") or ""),
+        "next_send_at": reminder_doc.get("next_send_at").isoformat() if reminder_doc.get("next_send_at") else None,
+        "last_sent_at": reminder_doc.get("last_sent_at").isoformat() if reminder_doc.get("last_sent_at") else None,
+        "created_at": reminder_doc.get("created_at").isoformat() if reminder_doc.get("created_at") else None,
+        "updated_at": reminder_doc.get("updated_at").isoformat() if reminder_doc.get("updated_at") else None,
+    }
+
+
+@app.get("/api/me/reminders")
+def get_my_reminders(current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_reminders_collection()
+
+    user_id = str(current_user["_id"])
+    profile_id = _active_profile_id(current_user)
+    reminder_doc = reminders_collection.find_one({"user_id": user_id, "profile_id": profile_id})
+    if not reminder_doc:
+        reminder_doc = {
+            "user_id": user_id,
+            "profile_id": profile_id,
+            "enabled": False,
+            "recipient_email": str(current_user.get("email") or "").strip().lower(),
+            "reminder_time": "09:00",
+            "timezone": "UTC",
+            "notes": "",
+        }
+    return {
+        "success": True,
+        "reminder": _public_reminder_doc(reminder_doc, current_user),
+    }
+
+
+@app.put("/api/me/reminders")
+def update_my_reminders(action: ReminderSettingsAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_reminders_collection()
+
+    recipient_email = str(action.recipient_email or current_user.get("email") or "").strip().lower()
+    if recipient_email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", recipient_email):
+        raise HTTPException(status_code=400, detail="Please enter a valid reminder email")
+
+    reminder_time = str(action.reminder_time or "09:00").strip()
+    try:
+        _parse_reminder_time(reminder_time)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    timezone_name = str(action.timezone or "UTC").strip() or "UTC"
+    try:
+        _resolve_timezone(timezone_name)
+    except Exception:
+        timezone_name = "UTC"
+
+    user_id = str(current_user["_id"])
+    profile_id = _active_profile_id(current_user)
+    now = datetime.now(timezone.utc)
+    next_send_at = _next_reminder_send_at({
+        "timezone": timezone_name,
+        "reminder_time": reminder_time,
+    }, from_dt=now) if action.enabled else None
+
+    update_doc = {
+        "user_id": user_id,
+        "profile_id": profile_id,
+        "enabled": bool(action.enabled),
+        "recipient_email": recipient_email,
+        "reminder_time": reminder_time,
+        "timezone": timezone_name,
+        "notes": str(action.notes or "").strip()[:500],
+        "updated_at": now,
+    }
+    if next_send_at is not None:
+        update_doc["next_send_at"] = next_send_at
+    else:
+        update_doc["next_send_at"] = None
+
+    existing = reminders_collection.find_one({"user_id": user_id, "profile_id": profile_id})
+    if existing:
+        reminders_collection.update_one(
+            {"_id": existing["_id"]},
+            {"$set": update_doc, "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+    else:
+        update_doc["created_at"] = now
+        reminders_collection.insert_one(update_doc)
+
+    refreshed_doc = reminders_collection.find_one({"user_id": user_id, "profile_id": profile_id})
+    return {
+        "success": True,
+        "reminder": _public_reminder_doc(refreshed_doc, current_user),
     }
 
 
@@ -1308,7 +1759,7 @@ def create_share_link(action: ShareLinkAction, current_user: dict[str, Any] = De
     if purpose not in {"consultation", "emergency"}:
         raise HTTPException(status_code=400, detail="Purpose must be consultation or emergency")
 
-    expires_hours = max(1, min(int(action.expires_hours or 24), 168))
+    expires_hours = int(action.expires_hours or 24)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=expires_hours)
 
@@ -1335,6 +1786,9 @@ def create_share_link(action: ShareLinkAction, current_user: dict[str, Any] = De
 @app.get("/api/share/{token}")
 def consume_share_link(token: str):
     _require_data_collections()
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{16,256}", str(token or "")):
+        raise HTTPException(status_code=400, detail="Invalid share token")
+
     doc = share_links_collection.find_one({"token": token})
     if not doc or bool(doc.get("revoked", False)):
         raise HTTPException(status_code=404, detail="Share link not found")
@@ -1374,18 +1828,30 @@ def consume_share_link(token: str):
         "degraded_mode": degraded_mode,
     }
 
-from concurrent.futures import ThreadPoolExecutor
-
 @app.post("/api/upload")
-async def upload_prescription(user_id: str, file: UploadFile = File(...)):
-    file_extension = os.path.splitext(file.filename)[1]
+async def upload_prescription(user_id: str, file: UploadFile = File(...), profile_id: str | None = DEFAULT_PROFILE_ID):
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=400, detail="User id is required")
+
+    _validate_upload_file(file)
+
+    request_started_at = time.perf_counter()
+    file_save_started_at = time.perf_counter()
+    file_extension = os.path.splitext(file.filename or "")[1].lower()
+    if file_extension not in {".png", ".jpg", ".jpeg", ".pdf"}:
+        raise HTTPException(status_code=400, detail="Only PNG, JPG, JPEG, and PDF files are allowed")
     file_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}{file_extension}")
     
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    _validate_file_size(file_path)
+    file_save_seconds = round(time.perf_counter() - file_save_started_at, 3)
         
     try:
+        ocr_started_at = time.perf_counter()
         ocr_result = process_prescription(file_path)
+        ocr_seconds = round(time.perf_counter() - ocr_started_at, 3)
 
         # Guard clause: if it's not verified as a prescription
         if ocr_result["label"] != "medical prescription" or ocr_result["confidence"] < 0.5:
@@ -1396,10 +1862,7 @@ async def upload_prescription(user_id: str, file: UploadFile = File(...)):
             )
 
         raw_names = ocr_result["drugs"]
-
-        # Parallelize drug validation for performance
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            validation_results = list(executor.map(validate_drug, raw_names))
+        unique_names = list(dict.fromkeys([str(name).strip() for name in raw_names if str(name).strip()]))
 
         detail_lookup = {
             d.get("name", "").strip().lower(): d
@@ -1407,26 +1870,84 @@ async def upload_prescription(user_id: str, file: UploadFile = File(...)):
             if d.get("name")
         }
 
+        effective_profile_id = str(profile_id or DEFAULT_PROFILE_ID)
+        existing_meds: list[dict[str, Any]] = []
+        duplicate_prescription_record: dict[str, Any] | None = None
+        if medications_collection is not None:
+            try:
+                existing_meds = _get_mongo_medications(normalized_user_id, effective_profile_id)
+            except Exception:
+                existing_meds = []
+
+        existing_raw_texts: set[str] = set()
+        if prescriptions_collection is not None:
+            try:
+                query = {"user_id": normalized_user_id}
+                query.update(_profile_query(effective_profile_id))
+                for doc in prescriptions_collection.find(query, {"raw_text": 1}):
+                    text = str(doc.get("raw_text") or "").strip().lower()
+                    if text:
+                        existing_raw_texts.add(text)
+                duplicate_prescription_record = prescriptions_collection.find_one({
+                    "user_id": normalized_user_id,
+                    "raw_text": str(ocr_result.get("text") or "").strip(),
+                    **_profile_query(effective_profile_id),
+                })
+            except Exception:
+                existing_raw_texts = set()
+                duplicate_prescription_record = None
+
         results = []
-        for validation in validation_results:
-            med_name = validation.get("name")
+        for med_name in unique_names:
             details = detail_lookup.get((med_name or "").strip().lower(), {})
-            is_valid = bool(validation.get("valid", False))
             inferred_frequency = _infer_frequency_from_text(ocr_result.get("text", ""), details.get("frequency", ""))
+            duplicate_in_profile = _has_duplicate_med(existing_meds, med_name, "N/A")
             results.append({
                 "name": med_name,
-                "valid": is_valid,
-                "rxcui": validation.get("rxcui", "N/A") if is_valid else "N/A",
+                "valid": None,
+                "rxcui": "N/A",
                 "dose": details.get("dose", ""),
                 "frequency": inferred_frequency,
-                "match_status": "matched" if is_valid else "unmatched",
+                "instructions": details.get("instructions", ""),
+                "ocr_confidence": details.get("confidence", 0.0),
+                "match_status": "duplicate_in_profile" if duplicate_in_profile else "pending",
+                "duplicate_in_profile": duplicate_in_profile,
+                "action": "skip" if duplicate_in_profile else "add",
+                "issue_flags": ["duplicate_in_profile"] if duplicate_in_profile else [],
             })
+
+        normalized_raw_text = str(ocr_result.get("text") or "").strip().lower()
+        duplicate_prescription_exact = bool(normalized_raw_text and normalized_raw_text in existing_raw_texts)
+        duplicate_meds_count = sum(1 for item in results if item.get("duplicate_in_profile"))
+
+        timing_summary = {
+            "file_save_seconds": file_save_seconds,
+            "ocr_endpoint_seconds": ocr_seconds,
+            "validation_seconds": 0.0,
+            "total_upload_seconds": round(time.perf_counter() - request_started_at, 3),
+            "raw_drug_count": len(raw_names),
+            "unique_drug_count": len(unique_names),
+            "validation_mode": "deferred",
+        }
+
+        ocr_internal_timing = ocr_result.get("timings") or {}
+        if isinstance(ocr_internal_timing, dict):
+            timing_summary.update({f"ocr_{key}": value for key, value in ocr_internal_timing.items()})
+
+        print(f"[UPLOAD TIMING] {timing_summary}")
 
         return {
             "drugs": results,
             "confidence": ocr_result["confidence"],
             "raw_text": ocr_result.get("text", ""),
             "uploaded_file_name": os.path.basename(file_path),
+            "timings": timing_summary,
+            "flags": {
+                "duplicate_prescription_exact": duplicate_prescription_exact,
+                "duplicate_prescription_record_id": str(duplicate_prescription_record.get("_id", "")) if duplicate_prescription_record else "",
+                "duplicate_medicines_count": duplicate_meds_count,
+                "new_medicines_count": max(0, len(results) - duplicate_meds_count),
+            },
         }
 
     except HTTPException:
@@ -1457,12 +1978,17 @@ def get_my_meds(current_user: dict[str, Any] = Depends(get_current_user)):
 
 @app.post("/api/add")
 def add_med(action: DrugAction):
+    if not str(action.user_id or "").strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    validated_drug_name = _validate_medication_name(action.drug_name)
+
     # Check for duplicates before adding
     existing = get_medications(action.user_id)
-    if _has_duplicate_med(existing, action.drug_name, action.rxcui):
+    if _has_duplicate_med(existing, validated_drug_name, action.rxcui):
         return {"status": "already_exists"}
         
-    add_medication(action.user_id, action.drug_name, action.rxcui, action.source or "API/React")
+    add_medication(action.user_id, validated_drug_name, action.rxcui, action.source or "API/React")
     return {"status": "added"}
 
 
@@ -1471,14 +1997,15 @@ def add_my_med(action: DrugAction, current_user: dict[str, Any] = Depends(get_cu
     _require_profile_completed(current_user)
     user_id = _auth_user_scope_id(current_user)
     profile_id = _active_profile_id(current_user)
+    validated_drug_name = _validate_medication_name(action.drug_name)
     existing = _get_mongo_medications(user_id, profile_id)
-    if _has_duplicate_med(existing, action.drug_name, action.rxcui):
-        return {"status": "already_exists"}
+    if _has_duplicate_med(existing, validated_drug_name, action.rxcui):
+        raise HTTPException(status_code=409, detail=f"{validated_drug_name} is already in this profile or is a close duplicate.")
 
     _add_mongo_medication(
         user_id,
         profile_id,
-        action.drug_name,
+        validated_drug_name,
         action.rxcui,
         action.source or "API/React/Auth",
         action.dose,
@@ -1500,8 +2027,9 @@ def delete_my_med(med_id: str, current_user: dict[str, Any] = Depends(get_curren
 def update_my_med(med_id: str, action: MedicationUpdateAction, current_user: dict[str, Any] = Depends(get_current_user)):
     user_id = _auth_user_scope_id(current_user)
     profile_id = _active_profile_id(current_user)
+    validated_drug_name = _validate_medication_name(action.drug_name)
     existing = [m for m in _get_mongo_medications(user_id, profile_id) if m.get("id") != med_id]
-    if _has_duplicate_med(existing, action.drug_name, "N/A"):
+    if _has_duplicate_med(existing, validated_drug_name, "N/A"):
         raise HTTPException(status_code=409, detail="Medication with this name already exists")
     _update_mongo_medication(user_id, profile_id, med_id, action)
     return {"status": "updated"}
@@ -1569,7 +2097,11 @@ async def upload_my_prescription(
     current_user: dict[str, Any] = Depends(get_current_user),
 ):
     _require_profile_completed(current_user)
-    return await upload_prescription(_auth_user_scope_id(current_user), file)
+    return await upload_prescription(
+        _auth_user_scope_id(current_user),
+        file,
+        _active_profile_id(current_user),
+    )
 
 
 @app.get("/api/me/prescriptions")
@@ -1614,6 +2146,11 @@ def get_my_prescription_file(record_id: str, current_user: dict[str, Any] = Depe
         raise HTTPException(status_code=404, detail="Stored file not found")
 
     return FileResponse(file_path, filename=uploaded)
+
+
+@app.on_event("startup")
+def start_background_workers():
+    _ensure_reminder_scheduler_started()
 
 if __name__ == "__main__":
     import uvicorn

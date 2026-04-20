@@ -34,10 +34,29 @@ const ProfileView = ({
   const [addProfileOpen, setAddProfileOpen] = useState(false);
   const [newProfileName, setNewProfileName] = useState('');
   const [newProfileEmail, setNewProfileEmail] = useState('');
+  const [localInputError, setLocalInputError] = useState('');
   const [patientDraft, setPatientDraft] = useState({
     name: '',
     email: '',
   });
+
+  const sanitizePersonNameInput = (value, maxLength = 120) => String(value || '')
+    .replace(/[0-9]/g, '')
+    .replace(/[^A-Za-z\s'-.]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .slice(0, maxLength);
+
+  const sanitizeAgeInput = (value) => {
+    const cleaned = String(value || '').replace(/[^0-9]/g, '').slice(0, 3);
+    if (!cleaned) return '';
+    const numeric = Number(cleaned);
+    if (Number.isNaN(numeric)) return '';
+    return String(Math.min(120, Math.max(0, numeric)));
+  };
+
+  const normalizeWhitespace = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+  const isValidName = (name) => /^[A-Za-z][A-Za-z\s'-.]*$/.test(String(name || '').trim()) && !/\d/.test(String(name || ''));
 
   const canDelete = useMemo(() => {
     const email = String(currentUser && currentUser.email ? currentUser.email : '').trim().toLowerCase();
@@ -55,10 +74,19 @@ const ProfileView = ({
   const hasMultipleProfiles = Array.isArray(profiles) && profiles.length > 1;
 
   const addCareTeamPatient = () => {
-    const name = patientDraft.name.trim();
+    const name = normalizeWhitespace(patientDraft.name);
     const email = patientDraft.email.trim().toLowerCase();
 
+    setLocalInputError('');
     if (!name && !email) return;
+    if (!name || !isValidName(name)) {
+      setLocalInputError('Caregiver patient name must contain letters only.');
+      return;
+    }
+    if (email && !isValidEmail(email)) {
+      setLocalInputError('Caregiver patient email must be valid.');
+      return;
+    }
 
     setProfileForm((previous) => {
       const nextPatients = Array.isArray(previous.care_team_patients) ? [...previous.care_team_patients] : [];
@@ -91,6 +119,18 @@ const ProfileView = ({
   };
 
   const confirmAddProfile = async () => {
+    const normalizedName = normalizeWhitespace(newProfileName);
+    const normalizedEmail = String(newProfileEmail || '').trim().toLowerCase();
+    setLocalInputError('');
+    if (!normalizedName || !isValidName(normalizedName)) {
+      setLocalInputError('Profile name must contain letters only.');
+      return;
+    }
+    if (normalizedEmail && !isValidEmail(normalizedEmail)) {
+      setLocalInputError('Profile email is invalid.');
+      return;
+    }
+
     const success = await onAddNewProfile(newProfileName, newProfileEmail);
     if (success) {
       setAddProfileOpen(false);
@@ -109,7 +149,17 @@ const ProfileView = ({
             <p className="text-sm text-slate-600 mt-2">Keep each patient profile updated for accurate safety checks.</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button onClick={() => setAddProfileOpen(true)} disabled={profileActionLoading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50">
+            <button
+              onClick={() => {
+                if (currentUser && !currentUser.is_premium) {
+                  if (onRequirePremium) onRequirePremium('profile_limit');
+                  return;
+                }
+                setAddProfileOpen(true);
+              }}
+              disabled={profileActionLoading}
+              className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-50"
+            >
               {profileActionLoading ? 'Adding...' : 'Add New Profile'}
             </button>
             {isCaregiver && (
@@ -142,18 +192,26 @@ const ProfileView = ({
 
       <GlassCard>
         {profileError && <p className="mb-3 text-sm text-red-600">{profileError}</p>}
+        {localInputError && <p className="mb-3 text-sm text-red-600">{localInputError}</p>}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Patient Name">
-            <input value={profileForm.patient_name} onChange={(e) => setProfileForm((p) => ({ ...p, patient_name: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Patient full name" />
+            <input value={profileForm.patient_name} onChange={(e) => setProfileForm((p) => ({ ...p, patient_name: sanitizePersonNameInput(e.target.value, 120) }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Patient full name" maxLength={120} />
           </Field>
 
           <Field label="Patient Email">
-            <input value={profileForm.patient_email} onChange={(e) => setProfileForm((p) => ({ ...p, patient_email: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="patient@example.com" />
+            <div>
+              <input
+                value={profileForm.patient_email}
+                readOnly
+                className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 cursor-not-allowed"
+                placeholder="patient@example.com"
+              />
+            </div>
           </Field>
 
           <Field label="Age">
-            <input value={profileForm.age} onChange={(e) => setProfileForm((p) => ({ ...p, age: e.target.value }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g., 47" />
+            <input type="number" min="0" max="120" step="1" value={profileForm.age} onChange={(e) => setProfileForm((p) => ({ ...p, age: sanitizeAgeInput(e.target.value) }))} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="e.g., 47" />
           </Field>
 
           <Field label="Chronic Conditions" spanTwo>
@@ -191,11 +249,11 @@ const ProfileView = ({
 
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Patient Name">
-                <input value={patientDraft.name} onChange={(e) => setPatientDraft((p) => ({ ...p, name: e.target.value }))} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Patient name" />
+                <input value={patientDraft.name} onChange={(e) => setPatientDraft((p) => ({ ...p, name: sanitizePersonNameInput(e.target.value, 120) }))} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Patient name" maxLength={120} />
               </Field>
 
               <Field label="Patient Email">
-                <input value={patientDraft.email} onChange={(e) => setPatientDraft((p) => ({ ...p, email: e.target.value }))} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="patient@example.com" />
+                <input value={patientDraft.email} onChange={(e) => setPatientDraft((p) => ({ ...p, email: String(e.target.value || '').slice(0, 120) }))} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="patient@example.com" maxLength={120} />
               </Field>
             </div>
 
@@ -313,18 +371,20 @@ const ProfileView = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Patient Name</label>
                   <input
                     value={newProfileName}
-                    onChange={(e) => setNewProfileName(e.target.value)}
+                    onChange={(e) => setNewProfileName(sanitizePersonNameInput(e.target.value, 80))}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm"
                     placeholder="Patient full name"
+                    maxLength={80}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Patient Email (optional)</label>
                   <input
                     value={newProfileEmail}
-                    onChange={(e) => setNewProfileEmail(e.target.value)}
+                    onChange={(e) => setNewProfileEmail(String(e.target.value || '').slice(0, 120))}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm"
                     placeholder="patient@example.com"
+                    maxLength={120}
                   />
                 </div>
               </div>

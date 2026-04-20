@@ -56,6 +56,22 @@ npm run dev
 ```
 *Frontend runs on `http://localhost:5173`*
 
+### 4. Run Unit Tests
+```bash
+# Install backend dependencies (includes pytest)
+pip install -r requirements.txt
+
+# Run tests
+pytest
+```
+
+Current baseline tests cover:
+- request model validation
+- key frequency normalization logic
+- API health endpoint smoke test
+
+Add new tests under `tests/` using `test_*.py` naming.
+
 ---
 
 ## 🔬 How It Works

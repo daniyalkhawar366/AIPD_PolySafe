@@ -16,3 +16,4 @@ bcrypt
 python-dotenv
 email-validator
 google-auth
+pytest

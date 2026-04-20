@@ -318,6 +318,7 @@ export default function SafetyAnalysisView({
 
   const recommendations = Array.isArray(report?.recommendations) ? report.recommendations : [];
   const topPriority = Array.isArray(report?.top_priority_alerts) ? report.top_priority_alerts : [];
+  const kindCounts = report?.kind_counts || {};
 
   const sorted = [...interactions].sort((a, b) => {
     const order = { High: 0, Medium: 1, Low: 2 };
@@ -391,6 +392,10 @@ export default function SafetyAnalysisView({
       `Tracked medications: ${meds.length}   |   Total safety flags: ${sorted.length}   |   High risk: ${highCount}   |   Medium risk: ${medCount}   |   Low risk: ${lowCount}`,
       { size: 11, gap: 12 },
     );
+
+    writeSection('How the analysis works');
+    writeLine('PolySafe compares the medication list against interaction data, then adds rule-based safety checks for duplicate ingredients, dose limits, schedule overlap, allergies, kidney/liver context, and food/alcohol risks.', { size: 11, gap: 4 });
+    writeLine(`Risk breakdown: ${Object.entries(kindCounts).map(([key, value]) => `${key}: ${value}`).join(' | ') || 'No risk categories found'}`, { size: 11, gap: 8 });
 
     writeSection('Current medications');
     if (meds.length === 0) {
@@ -608,6 +613,35 @@ export default function SafetyAnalysisView({
           </div>
         </div>
       )}
+
+      <div
+        style={{
+          background: '#F8FAFC',
+          border: '1px solid #E2E8F0',
+          borderRadius: 8,
+          padding: '12px 14px',
+          marginBottom: 18,
+        }}
+      >
+        <p
+          style={{
+            margin: 0,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: '#475569',
+          }}
+        >
+          How risks are found
+        </p>
+        <p style={{ margin: '6px 0 0', fontSize: 13.5, color: '#334155', lineHeight: 1.5 }}>
+          The backend combines clinical interaction data with rule-based checks for duplicate ingredients, dose limits, schedule overlap, food/alcohol issues, and profile context such as allergies, kidney function, and liver status.
+        </p>
+        <p style={{ margin: '8px 0 0', fontSize: 12.5, color: '#475569', lineHeight: 1.5 }}>
+          Risk categories: {Object.entries(kindCounts).length > 0 ? Object.entries(kindCounts).map(([key, value]) => `${key}: ${value}`).join(' · ') : 'No flagged categories yet.'}
+        </p>
+      </div>
 
       {/* ── Section label ────────────────────────────────────── */}
       <div
