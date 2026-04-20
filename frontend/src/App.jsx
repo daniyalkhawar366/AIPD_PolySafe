@@ -14,7 +14,7 @@ import AppModals from './components/AppModals';
 import DashboardView from './views/DashboardView';
 import HistoryView from './views/HistoryView';
 import ProfileView from './views/ProfileView';
-import PaymentView from './views/PaymentView';
+import UpgradeView from './views/UpgradeView';
 
 const appLogo = '/favicon.svg';
 
@@ -88,7 +88,7 @@ const VIEW_TO_PATH = {
   safety: '/safety',
   history: '/history',
   profile: '/profile',
-  payment: '/payment',
+  upgrade: '/upgrade',
 };
 
 const PATH_TO_VIEW = {
@@ -96,7 +96,7 @@ const PATH_TO_VIEW = {
   '/safety': 'safety',
   '/history': 'history',
   '/profile': 'profile',
-  '/payment': 'payment',
+  '/upgrade': 'upgrade',
   '/': 'dashboard',
 };
 
@@ -216,6 +216,7 @@ const App = () => {
   const [ocrMedsAdded, setOcrMedsAdded] = useState(false);
   const [selectedSafetyInteraction, setSelectedSafetyInteraction] = useState(null);
   const [premiumModalOpen, setPremiumModalOpen] = useState(false);
+  const [congratsModalOpen, setCongratsModalOpen] = useState(false);
   const [premiumContext, setPremiumContext] = useState('general');
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -502,9 +503,9 @@ const App = () => {
     setPremiumModalOpen(true);
   };
 
-  const openPaymentPage = () => {
+  const openUpgradePage = () => {
     setPremiumModalOpen(false);
-    navigateToView('payment');
+    navigateToView('upgrade');
   };
 
   const accountProfiles = Array.isArray(currentUser?.profiles) ? currentUser.profiles : [];
@@ -828,6 +829,26 @@ const App = () => {
     };
     fetchAuthMeta();
   }, []);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session_id');
+    const paymentSuccess = urlParams.get('payment_success');
+
+    if (paymentSuccess && sessionId && authHydrated && currentUser) {
+      const verifyPayment = async () => {
+        try {
+          await axios.post(`${API_BASE}/payments/verify-session`, { session_id: sessionId }, getAuthConfig(token));
+          fetchMe();
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setCongratsModalOpen(true);
+        } catch (err) {
+          console.error("Payment verification failed", err);
+        }
+      };
+      verifyPayment();
+    }
+  }, [authHydrated, currentUser, token]);
 
   useEffect(() => {
     if (token || !googleEnabled || !GOOGLE_CLIENT_ID || authMode === 'forgot') {
@@ -2280,12 +2301,13 @@ const App = () => {
               deleteAccountLoading={deleteAccountLoading}
               deleteMyAccount={deleteMyAccount}
             />
-          ) : activeView === 'payment' ? (
-            <PaymentView
+          ) : activeView === 'upgrade' ? (
+            <UpgradeView
               GlassCard={GlassCard}
               entranceVariants={entranceVariants}
               premiumPriceUsd={PREMIUM_PRICE_USD}
               onBack={() => navigateToView('dashboard')}
+              currentUser={currentUser}
             />
           ) : (
             <div className="h-full overflow-y-auto pr-1">
@@ -2356,7 +2378,7 @@ const App = () => {
         setPremiumModalOpen={setPremiumModalOpen}
         premiumContext={premiumContext}
         premiumPriceUsd={PREMIUM_PRICE_USD}
-        onOpenPaymentPage={openPaymentPage}
+        onOpenUpgradePage={openUpgradePage}
       />
 
       <AnimatePresence>
@@ -2461,6 +2483,39 @@ const App = () => {
                   className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-500"
                 >
                   Log out
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {congratsModalOpen && (
+          <div className="fixed inset-0 z-1210 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setCongratsModalOpen(false)}
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              className="relative w-full max-w-sm bg-white border-2 border-indigo-200 rounded-2xl shadow-2xl p-6 text-center"
+            >
+              <div className="mx-auto w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mb-4 shadow-inner">
+                <span className="text-3xl">🎉</span>
+              </div>
+              <h3 className="text-2xl font-bold text-slate-900">Congratulations!</h3>
+              <p className="text-sm text-slate-600 mt-2">Your PolySafe Premium subscription is active. All premium features are instantly unlocked!</p>
+
+              <div className="mt-6 flex justify-center">
+                <button
+                  onClick={() => setCongratsModalOpen(false)}
+                  className="w-full px-4 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow-md transition-colors"
+                >
+                  Start Using Premium
                 </button>
               </div>
             </motion.div>

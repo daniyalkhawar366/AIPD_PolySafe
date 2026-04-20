@@ -14,6 +14,7 @@ import secrets
 import smtplib
 from typing import Any
 from zoneinfo import ZoneInfo
+import stripe
 from pydantic import BaseModel, EmailStr, Field
 import bcrypt
 from jose import JWTError, jwt
@@ -69,6 +70,9 @@ FRONTEND_ORIGINS = [
     "http://localhost:4173",
     "http://127.0.0.1:4173",
 ]
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+if os.getenv("FRONTEND_URL"):
+    FRONTEND_ORIGINS.append(FRONTEND_URL)
 
 mongo_client = None
 users_collection = None
@@ -2147,6 +2151,57 @@ def get_my_prescription_file(record_id: str, current_user: dict[str, Any] = Depe
 
     return FileResponse(file_path, filename=uploaded)
 
+
+# --- Payment Endpoints ---
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+
+@app.post("/api/payments/create-checkout")
+def create_checkout(current_user: dict[str, Any] = Depends(get_current_user)):
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'usd',
+                    'unit_amount': 500,
+                    'product_data': {
+                        'name': 'PolySafe Premium',
+                        'description': 'Unlimited medication profiles and features',
+                    },
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url=f'{FRONTEND_URL}/dashboard?payment_success=1&session_id={{CHECKOUT_SESSION_ID}}',
+            cancel_url=f'{FRONTEND_URL}/upgrade?payment_canceled=1',
+            client_reference_id=str(current_user["_id"]),
+            customer_email=current_user.get("email")
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class VerifySessionAction(BaseModel):
+    session_id: str
+
+@app.post("/api/payments/verify-session")
+def verify_session(action: VerifySessionAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    session_id = action.session_id
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session_id")
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.payment_status == 'paid':
+            _require_users_collection()
+            users_collection.update_one(
+                {"_id": current_user["_id"]},
+                {"$set": {"is_premium": True}}
+            )
+            return {"status": "success", "is_premium": True}
+        else:
+            return {"status": "pending"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.on_event("startup")
 def start_background_workers():

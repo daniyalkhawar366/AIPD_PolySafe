@@ -145,7 +145,14 @@ const ProfileView = ({
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] tracking-widest uppercase font-bold text-indigo-500">Account</p>
-            <h2 className="text-2xl lg:text-3xl font-bold text-slate-900 mt-1">Profile</h2>
+            <div className="flex items-center gap-3 mt-1">
+              <h2 className="text-2xl lg:text-3xl font-bold text-slate-900">Profile</h2>
+              {currentUser?.is_premium && (
+                <span className="bg-indigo-100 text-indigo-800 text-xs font-semibold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 border border-indigo-200 shadow-sm mt-1">
+                   ✨ Premium Active
+                </span>
+              )}
+            </div>
             <p className="text-sm text-slate-600 mt-2">Keep each patient profile updated for accurate safety checks.</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">

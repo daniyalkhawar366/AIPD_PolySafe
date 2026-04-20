@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Activity, ChevronRight, LogOut, Menu, Shield, Upload, User, Users } from 'lucide-react';
+import { Activity, ChevronRight, Crown, LogOut, Menu, Shield, Upload, User, Users } from 'lucide-react';
 
 const NavItem = ({
   icon: Icon,
@@ -132,6 +132,14 @@ const AppSidebar = ({
               </span>
             ) : null}
             showChevron={activeView === 'profile'}
+          />
+          <NavItem
+            icon={Crown}
+            label="Upgrade"
+            active={activeView === 'upgrade'}
+            sidebarOpen={sidebarOpen}
+            onClick={() => onNavigate('upgrade')}
+            showChevron={activeView === 'upgrade'}
           />
         </nav>
 
