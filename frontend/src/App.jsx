@@ -616,8 +616,10 @@ const App = () => {
 
   useEffect(() => {
     setAuthHeader(token);
+  }, [token]);
 
-    if (manualLogoutRef.current && !token && !localStorage.getItem(TOKEN_KEY)) {
+  useEffect(() => {
+    if (manualLogoutRef.current && !localStorage.getItem(TOKEN_KEY)) {
       setCurrentUser(null);
       setSessionRestorePending(false);
       setAuthHydrated(true);
@@ -625,7 +627,7 @@ const App = () => {
     }
 
     const hydrateAuth = async () => {
-      const persistedToken = token || localStorage.getItem(TOKEN_KEY) || '';
+      const persistedToken = localStorage.getItem(TOKEN_KEY) || '';
 
       try {
         setSessionRestorePending(true);
@@ -658,7 +660,7 @@ const App = () => {
 
     setAuthHydrated(false);
     hydrateAuth();
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     const onPopState = () => {
@@ -811,6 +813,8 @@ const App = () => {
 
   useEffect(() => {
     if (currentUser || !authHydrated) return;
+    if (!token && !localStorage.getItem(TOKEN_KEY)) return;
+    
     const retryTimer = setTimeout(() => {
       fetchMe();
     }, 1500);
