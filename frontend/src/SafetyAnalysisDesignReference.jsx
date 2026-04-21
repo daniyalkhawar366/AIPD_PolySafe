@@ -292,6 +292,7 @@ export default function SafetyAnalysisView({
   profile = null,
   setActiveView = () => {},
   selectedInteraction = null,
+  selectedInteractionNonce = 0,
 }) {
   const [expandedInter, setExpandedInter] = useState(null);
   const rowRefs = useRef([]);
@@ -304,6 +305,7 @@ export default function SafetyAnalysisView({
       selectedInteraction.drug_a || '',
       selectedInteraction.drug_b || '',
       selectedInteraction.summary || '',
+      selectedInteraction.detail || '',
     ].join('|').toLowerCase();
   }, [selectedInteraction]);
 
@@ -452,6 +454,7 @@ export default function SafetyAnalysisView({
         inter.drug_a || '',
         inter.drug_b || '',
         inter.summary || '',
+        inter.detail || '',
       ].join('|').toLowerCase();
       return key === selectedInteractionKey;
     });
@@ -462,7 +465,7 @@ export default function SafetyAnalysisView({
     window.requestAnimationFrame(() => {
       rowRefs.current[selectedIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [selectedInteractionKey, sorted]);
+  }, [selectedInteractionKey, selectedInteractionNonce, sorted]);
 
   return (
     <div
@@ -726,8 +729,9 @@ export default function SafetyAnalysisView({
                 inter.drug_a || '',
                 inter.drug_b || '',
                 inter.summary || '',
+                inter.detail || '',
               ].join('|').toLowerCase() === selectedInteractionKey}
-              onToggle={() => setExpandedInter(expandedInter === i ? null : i)}
+              onToggle={() => setExpandedInter((prev) => (prev === i ? null : i))}
             />
           ))}
         </div>

@@ -80,33 +80,49 @@ def convert_to_plain_language(text):
     """
     Summarizes the clinical interaction text into a primary risk + formatted detail.
     """
-    # Identify high-level risk categories with more nuance
-    primary_risk = "These medicines may not work well together."
-    
-    # Priority-based matching for specific risks (if/elif ensures the most specific match wins)
-    if "ulcer" in text.lower() or "stomach" in text.lower() or "gastric" in text.lower():
-        primary_risk = "Higher chance of stomach irritation or internal bleeding."
-    elif "bleeding" in text.lower() or "anticoagulant" in text.lower() or "hemorrhage" in text.lower():
-        primary_risk = "Higher chance of bleeding or easy bruising."
-    elif "liver" in text.lower() or "hepatotoxicity" in text.lower():
-        primary_risk = "May put extra stress on the liver."
-    elif "kidney" in text.lower() or "nephro" in text.lower() or "renal" in text.lower():
-        primary_risk = "May put extra stress on the kidneys."
-    elif "heart" in text.lower() or "cardiac" in text.lower() or "arrhythmia" in text.lower():
-        primary_risk = "May affect heart rhythm or blood pressure control."
-    elif "breathing" in text.lower() or "respiratory" in text.lower():
-        primary_risk = "May affect breathing in sensitive patients."
-    elif "drowsiness" in text.lower() or "sedation" in text.lower() or "cns" in text.lower():
-        primary_risk = "May cause severe drowsiness or dizziness."
+    raw_text = str(text or "").strip()
+    lowered = raw_text.lower()
 
-    # Apply phrase mappings with bold formatting
-    formatted_detail = text
-    for clinical, plain in PLAIN_LANGUAGE_MAP.items():
-        formatted_detail = re.sub(re.escape(clinical), f"**{plain.upper()}**", formatted_detail, flags=re.IGNORECASE)
-    
+    # Remove noisy citation fragments and normalize whitespace.
+    cleaned_text = re.sub(r"\([^)]*see[^)]*\)", " ", raw_text, flags=re.IGNORECASE)
+    cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
+
+    primary_risk = "These medicines may not work well together."
+    detail = "Use both only with clinician guidance, and report unusual symptoms promptly."
+
+    if "ulcer" in lowered or "stomach" in lowered or "gastric" in lowered:
+        primary_risk = "Higher chance of stomach irritation or internal bleeding."
+        detail = "Watch for black stools, vomiting blood, severe stomach pain, or dizziness. Seek urgent care if these happen."
+    elif "bleeding" in lowered or "anticoagulant" in lowered or "hemorrhage" in lowered:
+        primary_risk = "Higher chance of bleeding or easy bruising."
+        detail = "Watch for gum bleeding, nosebleeds, dark stools, or unusual bruises. Contact your doctor if any appear."
+    elif "liver" in lowered or "hepatotoxicity" in lowered:
+        primary_risk = "May put extra stress on the liver."
+        detail = "Watch for yellow eyes/skin, dark urine, nausea, or right upper belly pain. Ask your doctor if symptoms appear."
+    elif "kidney" in lowered or "nephro" in lowered or "renal" in lowered:
+        primary_risk = "May put extra stress on the kidneys."
+        detail = "Watch for less urine, swelling, sudden fatigue, or confusion. Talk to your clinician if these occur."
+    elif "heart" in lowered or "cardiac" in lowered or "arrhythmia" in lowered or "blood pressure" in lowered:
+        primary_risk = "May affect heart rhythm or blood pressure control."
+        detail = "Watch for chest pain, fainting, very slow/fast heartbeat, or severe dizziness. Get urgent help for severe symptoms."
+    elif "breathing" in lowered or "respiratory" in lowered:
+        primary_risk = "May affect breathing in sensitive patients."
+        detail = "Watch for shortness of breath, wheeze, or chest tightness. Seek urgent care if breathing becomes difficult."
+    elif "drowsiness" in lowered or "sedation" in lowered or "cns" in lowered:
+        primary_risk = "May cause severe drowsiness or dizziness."
+        detail = "Avoid driving or alcohol until you know how this combination affects you. Report severe sleepiness to your doctor."
+    elif "cytochrome" in lowered or "cyp" in lowered or "metabol" in lowered:
+        primary_risk = "One medicine may raise the level of another in your body."
+        detail = "This can increase side effects. Your doctor may need to adjust dose, timing, or monitoring tests."
+
+    # Optional plain context snippet for transparency without full technical dump.
+    context_snippet = cleaned_text[:170] + "..." if len(cleaned_text) > 170 else cleaned_text
+    if context_snippet:
+        detail = f"{detail} Source note: {context_snippet}"
+
     return {
         "primary_risk": primary_risk,
-        "detail": formatted_detail[:600] + "..." if len(formatted_detail) > 600 else formatted_detail
+        "detail": detail,
     }
 
 def check_interactions_for_profile(medications):

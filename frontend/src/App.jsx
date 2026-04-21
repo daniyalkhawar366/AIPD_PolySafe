@@ -215,6 +215,7 @@ const App = () => {
   const [ocrActionInfo, setOcrActionInfo] = useState('');
   const [ocrMedsAdded, setOcrMedsAdded] = useState(false);
   const [selectedSafetyInteraction, setSelectedSafetyInteraction] = useState(null);
+  const [selectedSafetyInteractionNonce, setSelectedSafetyInteractionNonce] = useState(0);
   const [premiumModalOpen, setPremiumModalOpen] = useState(false);
   const [congratsModalOpen, setCongratsModalOpen] = useState(false);
   const [premiumContext, setPremiumContext] = useState('general');
@@ -490,6 +491,7 @@ const App = () => {
   const openSafetyForInteraction = (interaction) => {
     if (!interaction) return;
     setSelectedSafetyInteraction(interaction);
+    setSelectedSafetyInteractionNonce((prev) => prev + 1);
     navigateToView('safety');
   };
 
@@ -2323,6 +2325,7 @@ const App = () => {
                 profile={profileForm}
                 setActiveView={(view) => navigateToView(view)}
                 selectedInteraction={selectedSafetyInteraction}
+                selectedInteractionNonce={selectedSafetyInteractionNonce}
               />
             </div>
           )}
