@@ -31,7 +31,20 @@ const COOKIE_SESSION_TOKEN = '__cookie_session__';
 const CACHE_MEDS_KEY = 'polysafe_cache_meds';
 const CACHE_PRESCRIPTIONS_KEY = 'polysafe_cache_prescriptions';
 const CACHE_SAFETY_KEY = 'polysafe_cache_safety';
+const CACHE_MED_USE_KEY = 'polysafe_cache_med_use';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.REACT_APP_GOOGLE_CLIENT_ID || '';
+
+const readCachedMedUse = () => {
+  try {
+    const raw = localStorage.getItem(CACHE_MED_USE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
 axios.defaults.headers.common['ngrok-skip-browser-warning'] = '69420';
 axios.defaults.withCredentials = true;
 let authInterceptorInstalled = false;
@@ -216,6 +229,8 @@ const App = () => {
   const [ocrMedsAdded, setOcrMedsAdded] = useState(false);
   const [selectedSafetyInteraction, setSelectedSafetyInteraction] = useState(null);
   const [selectedSafetyInteractionNonce, setSelectedSafetyInteractionNonce] = useState(0);
+  const [medUseInfoByName, setMedUseInfoByName] = useState(() => readCachedMedUse());
+  const [medUseLoadingByName, setMedUseLoadingByName] = useState({});
   const [premiumModalOpen, setPremiumModalOpen] = useState(false);
   const [congratsModalOpen, setCongratsModalOpen] = useState(false);
   const [premiumContext, setPremiumContext] = useState('general');
@@ -393,13 +408,17 @@ const App = () => {
     if (!currentUser) return;
     try {
       const res = await axios.get(`${API_BASE}/me/meds`, getAuthConfig(token));
-      setMeds(res.data);
-      saveCache(CACHE_MEDS_KEY, res.data);
+      const medList = Array.isArray(res.data) ? res.data : [];
+      setMeds(medList);
+      saveCache(CACHE_MEDS_KEY, medList);
+      prefetchMedicationUseInfo(medList);
       setOfflineMode(false);
       setOfflineInfo('');
     } catch {
       const cached = loadCache(CACHE_MEDS_KEY, []);
-      setMeds(Array.isArray(cached) ? cached : []);
+      const cachedMeds = Array.isArray(cached) ? cached : [];
+      setMeds(cachedMeds);
+      prefetchMedicationUseInfo(cachedMeds);
       setOfflineMode(true);
       setOfflineInfo('You are offline. Showing last synced data.');
     }
@@ -492,11 +511,106 @@ const App = () => {
     if (!interaction) return;
     setSelectedSafetyInteraction(interaction);
     setSelectedSafetyInteractionNonce((prev) => prev + 1);
+    if (meds.length >= 2 && interactions.length === 0 && !loading) {
+      checkSafety();
+    }
     navigateToView('safety');
+  };
+
+  const getMedUseLookupKey = (name) => String(name || '').trim().toLowerCase();
+
+  const isStaleMedicineUseSummary = (summaryText) => {
+    const text = String(summaryText || '').trim().toLowerCase();
+    if (!text) return true;
+    return (
+      text.includes('indications and usage')
+      || text.includes('tablets are indicated')
+      || /^\d+\s*indications/.test(text)
+      || /indicated in\s*:?\s*\d*$/.test(text)
+    );
+  };
+
+  const prefetchMedicationUseInfo = async (medicationList) => {
+    const list = Array.isArray(medicationList) ? medicationList : [];
+    const targets = list
+      .map((med) => String(med?.name || '').trim())
+      .filter(Boolean)
+      .filter((name) => {
+        const key = getMedUseLookupKey(name);
+        return !medUseInfoByName[key] && !medUseLoadingByName[key];
+      });
+
+    if (targets.length === 0) return;
+
+    const batchSize = 3;
+    for (let index = 0; index < targets.length; index += batchSize) {
+      const batch = targets.slice(index, index + batchSize);
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(batch.map((medName) => fetchMedicationUseInfo(medName)));
+    }
+  };
+
+  const fetchMedicationUseInfo = async (medName) => {
+    const lookupKey = getMedUseLookupKey(medName);
+    if (!lookupKey) return;
+    if (medUseLoadingByName[lookupKey]) return;
+    const existing = medUseInfoByName[lookupKey];
+    if (existing && !isStaleMedicineUseSummary(existing.use_summary)) return;
+
+    setMedUseLoadingByName((prev) => ({ ...prev, [lookupKey]: true }));
+
+    const requestUseInfo = () => axios.get(`${API_BASE}/me/medicine-use`, {
+      ...getAuthConfig(token),
+      params: { name: medName },
+      timeout: 20000,
+    });
+
+    try {
+      let res;
+      try {
+        res = await requestUseInfo();
+      } catch (error) {
+        const timedOut = error?.code === 'ECONNABORTED' || !error?.response;
+        if (!timedOut) throw error;
+        res = await requestUseInfo();
+      }
+      const nextInfo = {
+        use_summary: res.data?.use_summary || 'No usage summary available for this medicine right now.',
+        source: res.data?.source || 'OpenFDA drug label (FDA SPL)',
+        found: Boolean(res.data?.found),
+      };
+      setMedUseInfoByName((prev) => {
+        const updated = {
+        ...prev,
+          [lookupKey]: nextInfo,
+        };
+        saveCache(CACHE_MED_USE_KEY, updated);
+        return updated;
+      });
+    } catch (err) {
+      const fallbackInfo = {
+        use_summary: err.response?.data?.detail || 'Could not load medicine-use details right now.',
+        source: 'OpenFDA drug label (FDA SPL)',
+        found: false,
+      };
+      setMedUseInfoByName((prev) => {
+        const updated = {
+        ...prev,
+          [lookupKey]: fallbackInfo,
+        };
+        saveCache(CACHE_MED_USE_KEY, updated);
+        return updated;
+      });
+    } finally {
+      setMedUseLoadingByName((prev) => ({ ...prev, [lookupKey]: false }));
+    }
   };
 
   const openSafetyPage = () => {
     if (requireProfileOrOpen()) return;
+    if (meds.length >= 2 && interactions.length === 0 && !loading) {
+      checkSafety();
+    }
     navigateToView('safety');
   };
 
@@ -562,7 +676,9 @@ const App = () => {
       setSelectedSafetyInteraction(null);
 
       const medsRes = await axios.get(`${API_BASE}/me/meds`, getAuthConfig(token));
-      setMeds(Array.isArray(medsRes.data) ? medsRes.data : []);
+      const switchedMeds = Array.isArray(medsRes.data) ? medsRes.data : [];
+      setMeds(switchedMeds);
+      prefetchMedicationUseInfo(switchedMeds);
 
       const prescriptionsRes = await axios.get(`${API_BASE}/me/prescriptions`, getAuthConfig(token));
       setSavedPrescriptions(Array.isArray(prescriptionsRes.data) ? prescriptionsRes.data : []);
@@ -743,6 +859,15 @@ const App = () => {
 
   useEffect(() => {
     if (currentUser) {
+      const cachedSafety = loadCache(CACHE_SAFETY_KEY, { interactions: [], report: null });
+      if (Array.isArray(cachedSafety?.interactions)) {
+        setInteractions(cachedSafety.interactions || []);
+        setSafetyReport(cachedSafety.report || null);
+      }
+      const cachedMedUse = loadCache(CACHE_MED_USE_KEY, {});
+      if (cachedMedUse && typeof cachedMedUse === 'object') {
+        setMedUseInfoByName(cachedMedUse);
+      }
       fetchMeds();
       fetchPrescriptions();
       const existingProfile = currentUser.profile || {};
@@ -806,12 +931,19 @@ const App = () => {
     if (meds.length < 2) {
       setInteractions([]);
       setSafetyReport(null);
+      setLoading(false);
       return;
     }
 
     // Rebuild safety data after app refresh/login so profile risk badges persist.
     scheduleSafetyRefresh();
   }, [currentUser, authHydrated, meds.length]);
+
+  useEffect(() => {
+    if (!currentUser || !currentUser.profile_completed) return;
+    if (!Array.isArray(meds) || meds.length === 0) return;
+    prefetchMedicationUseInfo(meds);
+  }, [currentUser, meds.length]);
 
   useEffect(() => {
     if (currentUser || !authHydrated) return;
@@ -1332,6 +1464,8 @@ const App = () => {
     setOcrMedsAdded(false);
     setOcrActionInfo('');
     setSelectedSafetyInteraction(null);
+    setMedUseInfoByName({});
+    setMedUseLoadingByName({});
     setOfflineMode(false);
     setOfflineInfo('');
     setProfileError('');
@@ -2275,6 +2409,9 @@ const App = () => {
               setManualFrequency={(value) => setManualFrequency(sanitizeFrequencyInput(value, 100))}
               manualSaving={manualSaving}
               uploadStage={uploadStage}
+              medUseInfoByName={medUseInfoByName}
+              medUseLoadingByName={medUseLoadingByName}
+              fetchMedicationUseInfo={fetchMedicationUseInfo}
             />
           ) : activeView === 'history' ? (
             <HistoryView
@@ -2326,6 +2463,7 @@ const App = () => {
                 setActiveView={(view) => navigateToView(view)}
                 selectedInteraction={selectedSafetyInteraction}
                 selectedInteractionNonce={selectedSafetyInteractionNonce}
+                isLoading={loading && meds.length >= 2}
               />
             </div>
           )}

@@ -31,7 +31,7 @@ except Exception:
 
 # Import your existing logic
 from ocr import process_prescription, extract_text, parse_drug_names
-from utils import validate_drug
+from utils import validate_drug, fetch_medicine_use_summary
 from user_profile import add_medication, get_medications, delete_medication, clear_profile
 from interaction import (
     check_safety_for_profile,
@@ -430,6 +430,17 @@ def _validate_medication_name(name: str) -> str:
     if re.search(r"\d", normalized):
         raise HTTPException(status_code=400, detail="Drug name cannot include numbers")
     if not re.fullmatch(r"[A-Za-z][A-Za-z\s'().\-]*", normalized):
+        raise HTTPException(status_code=400, detail="Drug name contains invalid characters")
+    return normalized
+
+
+def _validate_medication_lookup_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Drug name is required")
+    if len(normalized) > 200:
+        raise HTTPException(status_code=400, detail="Drug name must be 200 characters or less")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9\s'().\-/%]*", normalized):
         raise HTTPException(status_code=400, detail="Drug name contains invalid characters")
     return normalized
 
@@ -2092,6 +2103,19 @@ def check_my_interactions(current_user: dict[str, Any] = Depends(get_current_use
         "interactions": results,
         "report": build_safety_report(meds, results),
         "degraded_mode": False,
+    }
+
+
+@app.get("/api/me/medicine-use")
+def get_my_medicine_use(name: str, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_profile_completed(current_user)
+    normalized_name = _validate_medication_lookup_name(name)
+    use_info = fetch_medicine_use_summary(normalized_name)
+    return {
+        "name": normalized_name,
+        "use_summary": use_info.get("summary", ""),
+        "source": use_info.get("source", "OpenFDA drug label (FDA SPL)"),
+        "found": bool(use_info.get("found", False)),
     }
 
 

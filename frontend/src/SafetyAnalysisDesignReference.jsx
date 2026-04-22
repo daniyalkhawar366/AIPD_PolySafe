@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, AlertTriangle, ChevronDown, Shield, Activity, Pill, Download } from 'lucide-react';
+import { CheckCircle, AlertTriangle, ChevronDown, Shield, Activity, Download } from 'lucide-react';
 
 const SEVERITY_CONFIG = {
   High: {
@@ -28,6 +28,12 @@ const FRIENDLY_TERM_MAP = [
   [/concomitant use/gi, 'using these together'],
   [/hepatotoxic/gi, 'liver-harm'],
   [/toxicity/gi, 'harm'],
+  [/adverse event/gi, 'side effect'],
+  [/renal/gi, 'kidney'],
+  [/metabolized by cyp[0-9a-z\-]*/gi, 'processed by liver enzymes'],
+  [/cytochrome p450/gi, 'liver enzyme system'],
+  [/pharmacokinetic/gi, 'how the body processes the medicine'],
+  [/pharmacodynamic/gi, 'how the medicine affects the body'],
   [/hypotensive/gi, 'low blood pressure'],
   [/symptomatic/gi, 'noticeable'],
   [/initiation/gi, 'the first few days of use'],
@@ -45,6 +51,15 @@ function toFriendlyText(text) {
     result = result.replace(pattern, replacement);
   });
   return result;
+}
+
+function formatInteractionTitle(interaction) {
+  const drugA = String(interaction?.drug_a || '').trim();
+  const drugB = String(interaction?.drug_b || '').trim();
+  if (!drugA && !drugB) return 'Medication review';
+  if (!drugB || drugB.toLowerCase().includes('profile context')) return drugA || drugB;
+  if (drugB.toLowerCase() === 'dose/frequency' || drugB.toLowerCase().includes('dose limit')) return `${drugA} dose check`;
+  return `${drugA} with ${drugB}`;
 }
 
 function Badge({ severity }) {
@@ -113,9 +128,11 @@ function StatCard({ label, value, accent }) {
 
 const InteractionRow = forwardRef(function InteractionRow({ inter, index, isExpanded, onToggle, isSelected }, ref) {
   const cfg = SEVERITY_CONFIG[inter.severity] || SEVERITY_CONFIG.Low;
-  const title = inter.kind === 'overdose' ? inter.drug_a : `${inter.drug_a} + ${inter.drug_b}`;
+  const title = formatInteractionTitle(inter);
   const friendlySummary = toFriendlyText(inter.summary);
-  const friendlyDetail = toFriendlyText(inter.detail);
+  const detailPoints = Array.isArray(inter.detail_points) && inter.detail_points.length > 0
+    ? inter.detail_points.map((point) => toFriendlyText(point))
+    : [toFriendlyText(inter.detail)];
 
   return (
     <div
@@ -170,9 +187,9 @@ const InteractionRow = forwardRef(function InteractionRow({ inter, index, isExpa
                 fontSize: 15,
                 fontWeight: 600,
                 color: '#111827',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
+                lineHeight: 1.35,
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
               }}
             >
               {title}
@@ -237,9 +254,16 @@ const InteractionRow = forwardRef(function InteractionRow({ inter, index, isExpa
                 >
                   Why this matters
                 </p>
-                <p style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.6, margin: 0 }}>
-                  {friendlyDetail}
-                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {detailPoints.map((point, pointIndex) => (
+                    <div key={`${inter._pairKey || inter.drug_a}-${pointIndex}`} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <span style={{ marginTop: 7, width: 6, height: 6, borderRadius: '50%', background: '#94A3B8', flexShrink: 0 }} />
+                      <p style={{ fontSize: 13.5, color: '#374151', lineHeight: 1.65, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {point}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Guidance */}
@@ -293,9 +317,74 @@ export default function SafetyAnalysisView({
   setActiveView = () => {},
   selectedInteraction = null,
   selectedInteractionNonce = 0,
+  isLoading = false,
 }) {
   const [expandedInter, setExpandedInter] = useState(null);
   const rowRefs = useRef([]);
+
+  const makePairKey = (drugA, drugB) => {
+    const left = String(drugA || '').trim().toLowerCase();
+    const right = String(drugB || '').trim().toLowerCase();
+    return [left, right].sort().join('|');
+  };
+
+  const mergedInteractions = useMemo(() => {
+    const severityRank = { High: 0, Medium: 1, Low: 2 };
+    const grouped = new Map();
+
+    interactions.forEach((inter) => {
+      const pairKey = makePairKey(inter?.drug_a, inter?.drug_b);
+      if (!pairKey) return;
+      const existing = grouped.get(pairKey);
+      if (!existing) {
+        grouped.set(pairKey, {
+          ...inter,
+          _pairKey: pairKey,
+          _summaries: [String(inter?.summary || '').trim()].filter(Boolean),
+          _details: [String(inter?.detail || '').trim()].filter(Boolean),
+          _kinds: [String(inter?.kind || '').trim()].filter(Boolean),
+          _highestSeverity: inter?.severity || 'Low',
+        });
+        return;
+      }
+
+      const incomingSeverity = String(inter?.severity || 'Low');
+      const existingRank = severityRank[existing._highestSeverity] ?? 9;
+      const incomingRank = severityRank[incomingSeverity] ?? 9;
+      if (incomingRank < existingRank) {
+        existing._highestSeverity = incomingSeverity;
+        existing.severity = incomingSeverity;
+      }
+
+      const summary = String(inter?.summary || '').trim();
+      const detail = String(inter?.detail || '').trim();
+      const kind = String(inter?.kind || '').trim();
+      if (summary && !existing._summaries.includes(summary)) existing._summaries.push(summary);
+      if (detail && !existing._details.includes(detail)) existing._details.push(detail);
+      if (kind && !existing._kinds.includes(kind)) existing._kinds.push(kind);
+    });
+
+    return Array.from(grouped.values()).map((item) => {
+      const concernCount = item._summaries.length;
+      const combinedSummary = concernCount > 1
+        ? `${concernCount} safety concerns found for this medicine combination.`
+        : (item._summaries[0] || item.summary || 'Potential interaction detected.');
+      const detailPoints = item._details.length > 0
+        ? item._details
+        : [item.detail || 'Review this combination with your clinician.'];
+      const combinedDetail = detailPoints.join('\n');
+      const combinedKind = item._kinds.length > 1 ? 'combined' : (item._kinds[0] || item.kind);
+
+      return {
+        ...item,
+        severity: item._highestSeverity,
+        summary: combinedSummary,
+        detail: combinedDetail,
+        detail_points: detailPoints,
+        kind: combinedKind,
+      };
+    });
+  }, [interactions]);
 
   const selectedInteractionKey = useMemo(() => {
     if (!selectedInteraction) return '';
@@ -309,23 +398,34 @@ export default function SafetyAnalysisView({
     ].join('|').toLowerCase();
   }, [selectedInteraction]);
 
-  const severityCounts = report?.severity_counts || {
-    High: interactions.filter((i) => i.severity === 'High').length,
-    Medium: interactions.filter((i) => i.severity === 'Medium').length,
-    Low: interactions.filter((i) => i.severity === 'Low').length,
+  const selectedInteractionPairKey = useMemo(() => {
+    if (!selectedInteraction) return '';
+    return makePairKey(selectedInteraction.drug_a, selectedInteraction.drug_b);
+  }, [selectedInteraction]);
+
+  const sorted = useMemo(() => {
+    const order = { High: 0, Medium: 1, Low: 2 };
+    return [...mergedInteractions].sort((a, b) => {
+      const severityOrder = (order[a.severity] ?? 9) - (order[b.severity] ?? 9);
+      if (severityOrder !== 0) return severityOrder;
+      const aName = `${a.drug_a || ''}|${a.drug_b || ''}`.toLowerCase();
+      const bName = `${b.drug_a || ''}|${b.drug_b || ''}`.toLowerCase();
+      return aName.localeCompare(bName);
+    });
+  }, [mergedInteractions]);
+
+  const severityCounts = {
+    High: sorted.filter((i) => i.severity === 'High').length,
+    Medium: sorted.filter((i) => i.severity === 'Medium').length,
+    Low: sorted.filter((i) => i.severity === 'Low').length,
   };
   const highCount = severityCounts.High || 0;
   const medCount = severityCounts.Medium || 0;
   const lowCount = severityCounts.Low || 0;
 
   const recommendations = Array.isArray(report?.recommendations) ? report.recommendations : [];
-  const topPriority = Array.isArray(report?.top_priority_alerts) ? report.top_priority_alerts : [];
+  const topPriority = sorted.slice(0, 3);
   const kindCounts = report?.kind_counts || {};
-
-  const sorted = [...interactions].sort((a, b) => {
-    const order = { High: 0, Medium: 1, Low: 2 };
-    return (order[a.severity] ?? 9) - (order[b.severity] ?? 9);
-  });
 
   const handleExportDoctorSummary = async () => {
     const now = new Date();
@@ -456,7 +556,7 @@ export default function SafetyAnalysisView({
         inter.summary || '',
         inter.detail || '',
       ].join('|').toLowerCase();
-      return key === selectedInteractionKey;
+      return key === selectedInteractionKey || inter._pairKey === selectedInteractionPairKey;
     });
 
     if (selectedIndex === -1) return;
@@ -465,7 +565,7 @@ export default function SafetyAnalysisView({
     window.requestAnimationFrame(() => {
       rowRefs.current[selectedIndex]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-  }, [selectedInteractionKey, selectedInteractionNonce, sorted]);
+  }, [selectedInteractionKey, selectedInteractionPairKey, selectedInteractionNonce, sorted]);
 
   return (
     <div
@@ -505,7 +605,7 @@ export default function SafetyAnalysisView({
                 marginBottom: 6,
               }}
             >
-              Clinical report
+              Patient-friendly safety summary
             </p>
             <h1 style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.2, margin: 0 }}>
               Safety analysis
@@ -551,8 +651,37 @@ export default function SafetyAnalysisView({
         <StatCard label="High risk" value={highCount} accent={highCount > 0 ? '#DC2626' : undefined} />
         <StatCard label="Medium risk" value={medCount} accent={medCount > 0 ? '#D97706' : undefined} />
         <StatCard label="Low risk" value={lowCount} accent={lowCount > 0 ? '#059669' : undefined} />
-        <StatCard label="Total flags" value={interactions.length} />
+        <StatCard label="Total flags" value={sorted.length} />
       </div>
+
+      {isLoading && (
+        <div
+          style={{
+            background: '#EEF2FF',
+            border: '1px solid #C7D2FE',
+            borderRadius: 8,
+            padding: '12px 14px',
+            marginBottom: 14,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <div
+            className="animate-spin"
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              border: '2px solid #C7D2FE',
+              borderTopColor: '#4F46E5',
+            }}
+          />
+          <p style={{ margin: 0, fontSize: 13, color: '#3730A3', fontWeight: 600 }}>
+            Checking medication risks. This can take a few seconds on first load.
+          </p>
+        </div>
+      )}
 
       {topPriority.length > 0 && (
         <div
@@ -582,45 +711,10 @@ export default function SafetyAnalysisView({
         </div>
       )}
 
-      {recommendations.length > 0 && (
-        <div
-          style={{
-            background: '#F9FAFB',
-            border: '1px solid #E5E7EB',
-            borderRadius: 8,
-            padding: '12px 14px',
-            marginBottom: 18,
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: '#6B7280',
-            }}
-          >
-            Recommended next steps
-          </p>
-          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {recommendations.map((item, idx) => (
-              <div key={`${item}-${idx}`} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                <Pill size={14} style={{ color: '#6366F1', flexShrink: 0, marginTop: 2 }} />
-                <p style={{ margin: 0, fontSize: 13.5, color: '#374151', lineHeight: 1.45 }}>
-                  {toFriendlyText(item)}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div
         style={{
-          background: '#F8FAFC',
-          border: '1px solid #E2E8F0',
+          background: '#F0F9FF',
+          border: '1px solid #BAE6FD',
           borderRadius: 8,
           padding: '12px 14px',
           marginBottom: 18,
@@ -633,15 +727,15 @@ export default function SafetyAnalysisView({
             fontWeight: 700,
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
-            color: '#475569',
+            color: '#0C4A6E',
           }}
         >
-          How risks are found
+          How to read this page
         </p>
-        <p style={{ margin: '6px 0 0', fontSize: 13.5, color: '#334155', lineHeight: 1.5 }}>
-          The backend combines clinical interaction data with rule-based checks for duplicate ingredients, dose limits, schedule overlap, food/alcohol issues, and profile context such as allergies, kidney function, and liver status.
+        <p style={{ margin: '6px 0 0', fontSize: 13.5, color: '#0F172A', lineHeight: 1.6 }}>
+          Each card explains one medicine safety concern in plain words. Open a card to see why it matters and what action is safest.
         </p>
-        <p style={{ margin: '8px 0 0', fontSize: 12.5, color: '#475569', lineHeight: 1.5 }}>
+        <p style={{ margin: '8px 0 0', fontSize: 12.5, color: '#334155', lineHeight: 1.55 }}>
           Risk categories: {Object.entries(kindCounts).length > 0 ? Object.entries(kindCounts).map(([key, value]) => `${key}: ${value}`).join(' · ') : 'No flagged categories yet.'}
         </p>
       </div>
@@ -664,7 +758,7 @@ export default function SafetyAnalysisView({
             color: '#9CA3AF',
           }}
         >
-          {interactions.length} interaction{interactions.length !== 1 ? 's' : ''} detected
+          {sorted.length} interaction{sorted.length !== 1 ? 's' : ''} detected
         </p>
         <p
           style={{
@@ -680,7 +774,7 @@ export default function SafetyAnalysisView({
       </div>
 
       {/* ── Interaction list ─────────────────────────────────── */}
-      {interactions.length === 0 ? (
+      {sorted.length === 0 && !isLoading ? (
         <div
           style={{
             background: '#fff',
@@ -716,7 +810,7 @@ export default function SafetyAnalysisView({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {sorted.map((inter, i) => (
             <InteractionRow
-              key={i}
+              key={`${inter._pairKey || `${inter.drug_a}-${inter.drug_b}`}-${i}`}
               ref={(node) => {
                 rowRefs.current[i] = node;
               }}
@@ -730,7 +824,7 @@ export default function SafetyAnalysisView({
                 inter.drug_b || '',
                 inter.summary || '',
                 inter.detail || '',
-              ].join('|').toLowerCase() === selectedInteractionKey}
+              ].join('|').toLowerCase() === selectedInteractionKey || inter._pairKey === selectedInteractionPairKey}
               onToggle={() => setExpandedInter((prev) => (prev === i ? null : i))}
             />
           ))}
@@ -752,9 +846,7 @@ export default function SafetyAnalysisView({
       >
         <Activity size={13} style={{ color: '#9CA3AF', flexShrink: 0, marginTop: 2 }} />
         <p style={{ fontSize: 12.5, color: '#6B7280', lineHeight: 1.55, margin: 0 }}>
-          This report is generated from FDA cross-reference data and is for informational
-          purposes only. It is not a substitute for professional medical advice. Always consult a
-          licensed pharmacist or physician before adjusting any medication.
+          This report uses FDA label data plus safety rules and is meant to guide safer conversations. Always confirm medication changes with your pharmacist or doctor.
         </p>
       </div>
     </div>

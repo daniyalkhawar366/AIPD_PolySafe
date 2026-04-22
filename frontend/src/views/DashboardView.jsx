@@ -1,6 +1,6 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import { Activity, Pencil, Search, Shield, Trash2, Upload } from 'lucide-react';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Activity, ChevronDown, Pencil, Search, Shield, Trash2, Upload } from 'lucide-react';
 
 const DashboardView = ({
   GlassCard,
@@ -32,8 +32,22 @@ const DashboardView = ({
   setManualFrequency,
   manualSaving,
   uploadStage,
+  medUseInfoByName,
+  medUseLoadingByName,
+  fetchMedicationUseInfo,
 }) => {
+  const [expandedMedId, setExpandedMedId] = useState(null);
   const highRiskCount = interactions.filter((inter) => inter.severity === 'High').length;
+
+  const getLookupKey = (name) => String(name || '').trim().toLowerCase();
+
+  const onToggleMedicineDetails = (med) => {
+    const nextExpanded = expandedMedId === med.id ? null : med.id;
+    setExpandedMedId(nextExpanded);
+    if (nextExpanded && med?.name) {
+      fetchMedicationUseInfo(med.name);
+    }
+  };
 
   return (
     <motion.div key="dashboard" initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 12 }} className="h-full min-h-0 flex flex-col gap-3 overflow-hidden">
@@ -123,31 +137,90 @@ const DashboardView = ({
             ) : (
               filteredMeds.map((med) => {
                 const riskTag = getMedicationRiskTag(med.name);
+                const lookupKey = getLookupKey(med.name);
+                const useInfo = medUseInfoByName?.[lookupKey];
+                const useLoading = Boolean(medUseLoadingByName?.[lookupKey]);
+                const isExpanded = expandedMedId === med.id;
                 return (
-                  <motion.div layout key={med.id} className="group flex items-start justify-between gap-3 p-2.5 border-l-4 border-l-indigo-500 bg-slate-50 rounded-md border-b border-slate-100 hover:bg-slate-50 transition-colors duration-150">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-slate-800 text-sm font-semibold truncate">{renderHighlightedText(med.name, medSearch)}</p>
-                      {(med.dose || med.frequency) && <p className="font-mono text-xs text-slate-500 mt-0.5 truncate">{med.dose || 'Dose N/A'} · {med.frequency || 'Frequency N/A'}</p>}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {riskTag && (
+                  <motion.div key={med.id} className="group border-l-4 border-l-indigo-500 bg-slate-50 rounded-md border border-slate-100 hover:bg-slate-100/70 transition-colors duration-150 overflow-hidden">
+                    <div className="flex items-start justify-between gap-3 p-2.5">
+                      <button
+                        type="button"
+                        onClick={() => onToggleMedicineDetails(med)}
+                        className="flex-1 min-w-0 text-left"
+                      >
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-slate-800 text-sm font-semibold wrap-break-word">{renderHighlightedText(med.name, medSearch)}</p>
+                            {(med.dose || med.frequency) && <p className="font-mono text-xs text-slate-500 mt-0.5 wrap-break-word">{med.dose || 'Dose N/A'} · {med.frequency || 'Frequency N/A'}</p>}
+                          </div>
+                          <ChevronDown className={`w-4 h-4 mt-0.5 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        </div>
+                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {riskTag && (
+                          <button
+                            type="button"
+                            onClick={() => openSafetyForInteraction(riskTag.interaction)}
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[10px] font-semibold ${riskTag.className} hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-indigo-400`}
+                            title="Open the matching safety report"
+                          >
+                            {riskTag.label}
+                          </button>
+                        )}
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">{formatMedicationSource(med.source)}</span>
                         <button
-                          type="button"
-                          onClick={() => openSafetyForInteraction(riskTag.interaction)}
-                          className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[10px] font-semibold ${riskTag.className} hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-indigo-400`}
-                          title="Open the matching safety report"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openEditMed(med);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 text-indigo-500/80 hover:text-indigo-600 transition-all"
+                          title="Update medicine"
                         >
-                          {riskTag.label}
+                          <Pencil className="w-4 h-4" />
                         </button>
-                      )}
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">{formatMedicationSource(med.source)}</span>
-                      <button onClick={() => openEditMed(med)} className="opacity-0 group-hover:opacity-100 p-1.5 text-indigo-500/80 hover:text-indigo-600 transition-all" title="Update medicine">
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => deleteMed(med.id)} className="opacity-0 group-hover:opacity-100 p-1.5 text-red-500/70 hover:text-red-500 transition-all">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteMed(med.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 text-red-500/70 hover:text-red-500 transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
+
+                    <AnimatePresence initial={false}>
+                      {isExpanded && (
+                        <motion.div
+                          key={`med-use-${med.id}`}
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.22, ease: 'easeInOut' }}
+                          style={{ overflow: 'hidden' }}
+                        >
+                          <div className="px-3 pb-3 -mt-0.5">
+                            <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">What this medicine is commonly used for</p>
+                              {useLoading ? (
+                                <p className="mt-1.5 text-xs text-indigo-700">Loading trusted medicine-use details...</p>
+                              ) : (
+                                <>
+                                  <p className="mt-1.5 text-sm leading-6 text-slate-700 whitespace-pre-wrap wrap-break-word">
+                                    {useInfo?.use_summary || 'Click to load a trusted use summary for this medicine.'}
+                                  </p>
+                                  <p className="mt-2 text-[11px] text-slate-500">
+                                    Source: {useInfo?.source || 'OpenFDA drug label (FDA SPL)'}
+                                  </p>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </motion.div>
                 );
               })
