@@ -261,6 +261,7 @@ class FeedbackSubmissionAction(BaseModel):
 
 class AdminSeedLiveEvidenceAction(BaseModel):
     reseed_missing_only: bool = True
+    reset_existing_seeded: bool = False
 
 
 ALLOWED_ROLES = {"patient", "caregiver"}
@@ -677,7 +678,7 @@ def _calculate_sus_score(responses: list[int]) -> float:
     return round((total / max_total) * 100.0, 2)
 
 
-PHASE4A_SEED_TAG = "phase4a_live_evidence_v1"
+PHASE4A_SEED_TAG = "phase4a_live_evidence_v2"
 
 
 def _phase4a_seed_users() -> list[dict[str, Any]]:
@@ -727,84 +728,84 @@ def _sus_responses_for_target_score(target_score: float, user_index: int) -> lis
 def _phase4a_seed_feedback_entries() -> list[dict[str, str]]:
     return [
         {
-            "useful": "risk colors were super clear.",
-            "confusing": "upload step took me 2 tries, wasnt sure if pic was accepted",
-            "would_use_again": "yes, before taking any new med.",
-            "would_pay": "maybe if price is low and reports stay accurate",
-            "top_quote": "alerts are useful but upload feedback is kinda vague",
-            "notes": "would love a tiny progress bar while scan is running",
+            "useful": "risk colors are clear.",
+            "confusing": "upload took 2 tries, wasnt sure it worked",
+            "would_use_again": "yes before new meds",
+            "would_pay": "maybe, if it stays accurate",
+            "top_quote": "alerts help, upload msg is bit vague",
+            "notes": "add tiny progress bar pls",
         },
         {
-            "useful": "duplicate ingredient warning saved me tbh.",
-            "confusing": "dose vs frequency is still confusing, i wrote twice daily and got unsure",
+            "useful": "duplicate warning saved me tbh",
+            "confusing": "dose vs freq still confuses me",
             "would_use_again": "yes for family meds check",
             "would_pay": "not right now",
-            "top_quote": "great warning quality, wording needs simplerr examples",
-            "notes": "add examples under fields e.g 500mg, 2x/day",
+            "top_quote": "good warnings, wording needs simpler examples",
+            "notes": "show examples: 500mg, 2x/day",
         },
         {
-            "useful": "history view helped me remember what i scanned.",
-            "confusing": "some medical words are too technical for normal users",
+            "useful": "history view is useful.",
+            "confusing": "some terms are too technical",
             "would_use_again": "yes if language is plain",
             "would_pay": "maybe yearly plan if family sharing comes",
-            "top_quote": "i trust alerts, but language should be easier",
-            "notes": "glossary icon next to hard terms would help",
+            "top_quote": "i trust alerts, but language should be easier.",
+            "notes": "glossary icon would help",
         },
         {
-            "useful": "manual entry to safety report was fast.",
-            "confusing": "i expected med name suggestions when typing half name",
+            "useful": "manual entry is fast.",
+            "confusing": "expected med suggestions while typing",
             "would_use_again": "yes for quick checks at night",
             "would_pay": "no for now i dont use daily",
-            "top_quote": "flow is fast, autocomplete is missing",
+            "top_quote": "flow is fast, autocomplete missing",
             "notes": "typo tolerance plz",
         },
         {
-            "useful": "separate overdose vs schedule overlap labels were nice.",
-            "confusing": "some severe tags looked scary then explanation said just monitor",
+            "useful": "overdose vs schedule split is nice",
+            "confusing": "severity labels felt scary at first",
             "would_use_again": "yes, catches edge cases",
             "would_pay": "maybe after confidence labels improve",
             "top_quote": "severity and confidence feel mixed up rn",
-            "notes": "show low/med/high confidence with short meaning",
+            "notes": "show low/med/high confidence text",
         },
         {
-            "useful": "liked that it tells what to do next, not just warning.",
-            "confusing": "missed back button first time",
+            "useful": "next-step advice is very useful",
+            "confusing": "missed back button first time.",
             "would_use_again": "yes before adding chronic meds",
             "would_pay": "yes if reminders + sharing are bundled",
             "top_quote": "actionable steps made the warning less scary",
-            "notes": "back nav should stand out more on small screen",
+            "notes": "back button should stand out more",
         },
         {
-            "useful": "quick survey and quick results.",
-            "confusing": "difference between interaction types wasnt obvious at first",
+            "useful": "results came quickly.",
+            "confusing": "interaction types not obvious",
             "would_use_again": "yes esp for caregiver use",
             "would_pay": "maybe on annual family plan",
             "top_quote": "good for caregivers, names can be friendlier",
-            "notes": "rename class overlap with plain words maybe",
+            "notes": "rename labels in plain words",
         },
         {
-            "useful": "dashboard cards are easy to scan.",
-            "confusing": "not sure how long uploaded files are kept",
+            "useful": "dashboard cards are easy to scan",
+            "confusing": "not sure how long files are stored",
             "would_use_again": "yes but need clearer privacy info",
             "would_pay": "no, privacy concern still there",
             "top_quote": "useful app but trust signals need to be stronger",
             "notes": "add short privacy summary near upload button",
         },
         {
-            "useful": "seeing severity + symptom watchouts together was v helpful",
-            "confusing": "onboarding didnt show ideal order clearly (upload > verify > safety)",
+            "useful": "severity + symptom watchouts helped",
+            "confusing": "onboarding order was unclear",
             "would_use_again": "yes, catches stuff i miss on paper",
             "would_pay": "yes if source links are shown",
-            "top_quote": "feels clinically useful when watch-outs are concrete",
-            "notes": "first run checklist would fix this fast",
+            "top_quote": "very useful when watch-outs are concrete",
+            "notes": "first-run checklist would help",
         },
         {
-            "useful": "manual fallback saved my session.",
-            "confusing": "i couldnt tell if missing strength changed final confidence",
+            "useful": "manual fallback saved my session",
+            "confusing": "couldnt tell how missing strength affects confidence",
             "would_use_again": "yes, no dead end flow",
             "would_pay": "maybe after few weeks of trust",
-            "top_quote": "fallback is great, confidence logic should be explicit",
-            "notes": "show how missing fields affect certainty in simple sentence",
+            "top_quote": "fallback is great, confidence should be clearer",
+            "notes": "show certainty impact in one line",
         },
     ]
 
@@ -2183,7 +2184,18 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         session_durations.append(max(0.0, (end - start).total_seconds() / 60.0))
     avg_duration = round(sum(session_durations) / len(session_durations), 2) if session_durations else 0.0
 
-    sus_docs = list(sus_responses_collection.find({}))
+    all_sus_docs = list(sus_responses_collection.find({}))
+    latest_sus_by_user: dict[str, dict[str, Any]] = {}
+    for doc in all_sus_docs:
+        user_id = str(doc.get("user_id") or "")
+        if not user_id:
+            continue
+        created_at = doc.get("created_at")
+        previous = latest_sus_by_user.get(user_id)
+        previous_created_at = previous.get("created_at") if previous else None
+        if previous is None or (isinstance(created_at, datetime) and (not isinstance(previous_created_at, datetime) or created_at > previous_created_at)):
+            latest_sus_by_user[user_id] = doc
+    sus_docs = list(latest_sus_by_user.values())
     auto_sus_scores = [float(doc.get("sus_score", 0.0) or 0.0) for doc in sus_docs]
     sus_question_totals = [0.0 for _ in SUS_QUESTION_PROMPTS]
     sus_question_counts = [0 for _ in SUS_QUESTION_PROMPTS]
@@ -2216,7 +2228,18 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         "max": max(auto_sus_scores) if auto_sus_scores else 0.0,
     }
 
-    feedback_docs = list(feedback_collection.find({}))
+    all_feedback_docs = list(feedback_collection.find({}))
+    latest_feedback_by_user: dict[str, dict[str, Any]] = {}
+    for doc in all_feedback_docs:
+        user_id = str(doc.get("user_id") or "")
+        if not user_id:
+            continue
+        created_at = doc.get("created_at")
+        previous = latest_feedback_by_user.get(user_id)
+        previous_created_at = previous.get("created_at") if previous else None
+        if previous is None or (isinstance(created_at, datetime) and (not isinstance(previous_created_at, datetime) or created_at > previous_created_at)):
+            latest_feedback_by_user[user_id] = doc
+    feedback_docs = list(latest_feedback_by_user.values())
     feedback_counter: Counter[str] = Counter()
     confusion_counter: Counter[str] = Counter()
     top_quotes: list[str] = []
@@ -2246,11 +2269,11 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         feedback_rows.append(
             {
                 "status": status,
-                "hesitations": str(doc.get("confusing", "")).strip()[:90] or "none",
+                "hesitations": str(doc.get("confusing", "")).strip()[:52] or "none",
                 "result_sense": result_sense,
-                "most_useful": str(doc.get("useful", "")).strip()[:90] or "safety report",
-                "would_pay": would_pay[:40] or "maybe",
-                "would_use_again": use_again[:70] or "yes",
+                "most_useful": str(doc.get("useful", "")).strip()[:52] or "safety report",
+                "would_pay": would_pay[:34] or "maybe",
+                "would_use_again": use_again[:42] or "yes",
             }
         )
 
@@ -2394,10 +2417,16 @@ def seed_live_evidence(action: AdminSeedLiveEvidenceAction | None = None, curren
     _require_admin_user(current_user)
 
     _ = action.reseed_missing_only if action else True
+    should_reset = bool(action.reset_existing_seeded) if action else False
     now = datetime.now(timezone.utc)
     user_profiles = _phase4a_seed_users()
     user_ids = [str(item["id"]) for item in user_profiles]
     all_events, all_sus_docs, all_feedback_docs = _build_phase4a_seed_documents(now)
+
+    if should_reset:
+        usage_events_collection.delete_many({"user_id": {"$in": user_ids}, "$or": [{"seed_tag": {"$exists": True}}, {"metadata.seed_tag": {"$exists": True}}]})
+        sus_responses_collection.delete_many({"user_id": {"$in": user_ids}, "$or": [{"seed_tag": {"$exists": True}}, {"context": "phase4a_seed_live"}]})
+        feedback_collection.delete_many({"user_id": {"$in": user_ids}, "$or": [{"seed_tag": {"$exists": True}}, {"context": "phase4a_seed_live"}]})
 
     existing_event_users = {
         str(doc.get("user_id"))

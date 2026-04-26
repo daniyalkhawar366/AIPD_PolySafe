@@ -499,13 +499,15 @@ const App = () => {
     }
   };
 
-  const seedAdminLiveEvidence = async () => {
+  const seedAdminLiveEvidence = async (resetExisting = false) => {
     if (!currentUser) return;
     setAdminSeedLoading(true);
     setAdminSeedInfo('');
     setAdminError('');
     try {
-      const res = await axios.post(`${API_BASE}/admin/seed-live-evidence`, {}, getAuthConfig(token));
+      const res = await axios.post(`${API_BASE}/admin/seed-live-evidence`, {
+        reset_existing_seeded: Boolean(resetExisting),
+      }, getAuthConfig(token));
       const payload = res?.data || {};
       const inserted = payload.inserted_counts || {};
       const skipped = payload.skipped_counts || {};
@@ -2669,7 +2671,8 @@ const App = () => {
               seedInfo={adminSeedInfo}
               error={adminError}
               onRefresh={fetchAdminEvidence}
-              onSeed={seedAdminLiveEvidence}
+              onSeed={() => seedAdminLiveEvidence(false)}
+              onResetSeed={() => seedAdminLiveEvidence(true)}
             />
           ) : (
             <div className="h-full overflow-y-auto pr-1">

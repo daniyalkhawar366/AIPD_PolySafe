@@ -12,6 +12,7 @@ const AdminEvidenceView = ({
   error,
   onRefresh,
   onSeed,
+  onResetSeed,
 }) => {
   const kpis = analytics?.kpis || {};
   const liveSummary = analytics?.live_summary || {};
@@ -58,6 +59,15 @@ const AdminEvidenceView = ({
             >
               <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
               Seed Live Evidence
+            </button>
+            <button
+              type="button"
+              onClick={onResetSeed}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-rose-200 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={loading || seedLoading}
+            >
+              <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
+              Reset + Reseed
             </button>
           </div>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
