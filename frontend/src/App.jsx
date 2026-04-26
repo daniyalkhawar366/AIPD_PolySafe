@@ -499,15 +499,13 @@ const App = () => {
     }
   };
 
-  const seedAdminLiveEvidence = async (resetExisting = false) => {
+  const seedAdminLiveEvidence = async () => {
     if (!currentUser) return;
     setAdminSeedLoading(true);
     setAdminSeedInfo('');
     setAdminError('');
     try {
-      const res = await axios.post(`${API_BASE}/admin/seed-live-evidence`, {
-        reset_existing_seeded: Boolean(resetExisting),
-      }, getAuthConfig(token));
+      const res = await axios.post(`${API_BASE}/admin/seed-live-evidence`, {}, getAuthConfig(token));
       const payload = res?.data || {};
       const inserted = payload.inserted_counts || {};
       const skipped = payload.skipped_counts || {};
@@ -519,6 +517,26 @@ const App = () => {
     } catch (err) {
       const detail = err?.response?.data?.detail || 'Could not seed live evidence.';
       setAdminSeedInfo('');
+      setAdminError(detail);
+    } finally {
+      setAdminSeedLoading(false);
+    }
+  };
+
+  const resetAdminEvidence = async () => {
+    if (!currentUser) return;
+    setAdminSeedLoading(true);
+    setAdminSeedInfo('');
+    setAdminError('');
+    try {
+      const res = await axios.post(`${API_BASE}/admin/reset-live-evidence`, {}, getAuthConfig(token));
+      const deleted = res?.data?.deleted_counts || {};
+      setAdminSeedInfo(
+        `Evidence reset complete. Deleted events:${deleted.usage_events || 0}, SUS:${deleted.sus_responses || 0}, feedback:${deleted.feedback || 0}.`,
+      );
+      await fetchAdminEvidence();
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Could not reset evidence.';
       setAdminError(detail);
     } finally {
       setAdminSeedLoading(false);
@@ -2671,8 +2689,8 @@ const App = () => {
               seedInfo={adminSeedInfo}
               error={adminError}
               onRefresh={fetchAdminEvidence}
-              onSeed={() => seedAdminLiveEvidence(false)}
-              onResetSeed={() => seedAdminLiveEvidence(true)}
+              onSeed={seedAdminLiveEvidence}
+              onReset={resetAdminEvidence}
             />
           ) : (
             <div className="h-full overflow-y-auto pr-1">

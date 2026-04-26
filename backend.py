@@ -2520,6 +2520,27 @@ def seed_live_evidence(action: AdminSeedLiveEvidenceAction | None = None, curren
     }
 
 
+@app.post("/api/admin/reset-live-evidence")
+def reset_live_evidence(current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_usage_events_collection()
+    _require_sus_collection()
+    _require_feedback_collection()
+    _require_admin_user(current_user)
+
+    deleted_events = usage_events_collection.delete_many({}).deleted_count
+    deleted_sus = sus_responses_collection.delete_many({}).deleted_count
+    deleted_feedback = feedback_collection.delete_many({}).deleted_count
+
+    return {
+        "success": True,
+        "deleted_counts": {
+            "usage_events": int(deleted_events),
+            "sus_responses": int(deleted_sus),
+            "feedback": int(deleted_feedback),
+        },
+    }
+
+
 @app.post("/api/me/privacy/export")
 def export_my_data(current_user: dict[str, Any] = Depends(get_current_user)):
     _require_data_collections()
