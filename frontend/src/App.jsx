@@ -173,6 +173,8 @@ const App = () => {
   const [adminSlideSummary, setAdminSlideSummary] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState('');
+  const [adminSeedLoading, setAdminSeedLoading] = useState(false);
+  const [adminSeedInfo, setAdminSeedInfo] = useState('');
   const [susModalOpen, setSusModalOpen] = useState(false);
   const [susResponses, setSusResponses] = useState(Array(10).fill(3));
   const [susSubmitting, setSusSubmitting] = useState(false);
@@ -487,6 +489,30 @@ const App = () => {
       setAdminError(detail);
     } finally {
       setAdminLoading(false);
+    }
+  };
+
+  const seedAdminLiveEvidence = async () => {
+    if (!currentUser) return;
+    setAdminSeedLoading(true);
+    setAdminSeedInfo('');
+    setAdminError('');
+    try {
+      const res = await axios.post(`${API_BASE}/admin/seed-live-evidence`, {}, getAuthConfig(token));
+      const payload = res?.data || {};
+      const inserted = payload.inserted_counts || {};
+      const skipped = payload.skipped_counts || {};
+      setAdminSeedInfo(
+        `Seed complete. Inserted events:${inserted.usage_events || 0}, SUS:${inserted.sus_responses || 0}, feedback:${inserted.feedback || 0}. `
+        + `Skipped already-seeded users (events:${skipped.usage_event_users_already_seeded || 0}, SUS:${skipped.sus_users_already_seeded || 0}, feedback:${skipped.feedback_users_already_seeded || 0}).`
+      );
+      await fetchAdminEvidence();
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Could not seed live evidence.';
+      setAdminSeedInfo('');
+      setAdminError(detail);
+    } finally {
+      setAdminSeedLoading(false);
     }
   };
 
@@ -2632,8 +2658,11 @@ const App = () => {
               analytics={adminAnalytics}
               slideSummary={adminSlideSummary}
               loading={adminLoading}
+              seedLoading={adminSeedLoading}
+              seedInfo={adminSeedInfo}
               error={adminError}
               onRefresh={fetchAdminEvidence}
+              onSeed={seedAdminLiveEvidence}
             />
           ) : (
             <div className="h-full overflow-y-auto pr-1">

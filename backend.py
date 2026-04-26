@@ -259,6 +259,10 @@ class FeedbackSubmissionAction(BaseModel):
     context: str = Field(default="in_app_prompt", max_length=60)
 
 
+class AdminSeedLiveEvidenceAction(BaseModel):
+    reseed_missing_only: bool = True
+
+
 ALLOWED_ROLES = {"patient", "caregiver"}
 ALLOWED_UPLOAD_MIME_TYPES = {
     "image/png",
@@ -661,6 +665,245 @@ def _calculate_sus_score(responses: list[int]) -> float:
         else:
             total += 5 - answer
     return round(total * 2.5, 2)
+
+
+PHASE4A_SEED_TAG = "phase4a_live_evidence_v1"
+
+
+def _phase4a_seed_users() -> list[dict[str, Any]]:
+    return [
+        {"id": "phase4a_seed_user_01", "stage_max": 6, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 45.0},
+        {"id": "phase4a_seed_user_02", "stage_max": 5, "day_offsets": [0, 1, 2, 7, 10], "sus_target": 52.5},
+        {"id": "phase4a_seed_user_03", "stage_max": 6, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 57.5},
+        {"id": "phase4a_seed_user_04", "stage_max": 4, "day_offsets": [0, 1, 5, 8], "sus_target": 60.0},
+        {"id": "phase4a_seed_user_05", "stage_max": 3, "day_offsets": [0, 3, 8, 13], "sus_target": 62.5},
+        {"id": "phase4a_seed_user_06", "stage_max": 6, "day_offsets": [0, 1, 6, 8, 12], "sus_target": 67.5},
+        {"id": "phase4a_seed_user_07", "stage_max": 5, "day_offsets": [0, 2, 6, 9], "sus_target": 70.0},
+        {"id": "phase4a_seed_user_08", "stage_max": 2, "day_offsets": [0, 4, 9], "sus_target": 72.5},
+        {"id": "phase4a_seed_user_09", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 77.5},
+        {"id": "phase4a_seed_user_10", "stage_max": 4, "day_offsets": [0, 1, 8, 11], "sus_target": 82.5},
+    ]
+
+
+def _sus_responses_for_target_score(target_score: float, user_index: int) -> list[int]:
+    target_total = max(0, min(40, int(round(float(target_score) / 2.5))))
+    contributions = [2 for _ in range(10)]
+    delta = target_total - sum(contributions)
+    if delta != 0:
+        direction = 1 if delta > 0 else -1
+        remaining = abs(delta)
+        idx = user_index % 10
+        guard = 0
+        while remaining > 0 and guard < 300:
+            guard += 1
+            current = contributions[idx]
+            if direction > 0 and current < 4:
+                contributions[idx] += 1
+                remaining -= 1
+            elif direction < 0 and current > 0:
+                contributions[idx] -= 1
+                remaining -= 1
+            idx = (idx + 3) % 10
+
+    responses: list[int] = []
+    for idx, contribution in enumerate(contributions):
+        if idx % 2 == 0:
+            responses.append(contribution + 1)
+        else:
+            responses.append(5 - contribution)
+    return [max(1, min(5, int(value))) for value in responses]
+
+
+def _phase4a_seed_feedback_entries() -> list[dict[str, str]]:
+    return [
+        {
+            "useful": "The interaction severity colors made it easy to notice when two medicines should not be combined.",
+            "confusing": "Uploading worked, but I was not sure if blurry prescriptions were fully read or partially skipped.",
+            "would_use_again": "Yes, especially before I buy an OTC painkiller.",
+            "would_pay": "Maybe a small monthly amount if it reliably catches risky combinations for my parents.",
+            "top_quote": "The safety report gave me confidence, but upload feedback needs to be clearer.",
+            "notes": "I liked the concise explanation blocks. A progress indicator during OCR would reduce anxiety.",
+        },
+        {
+            "useful": "Seeing duplicate ingredient warnings helped me avoid taking two products with similar active compounds.",
+            "confusing": "Dose and frequency fields felt ambiguous: I typed twice daily but expected an auto-converted per-day value.",
+            "would_use_again": "Yes, because I often forget if two brands contain overlapping ingredients.",
+            "would_pay": "Not yet. I would pay only after seeing physician-backed references inside each warning.",
+            "top_quote": "Great warnings, but dosage wording should match how patients actually speak.",
+            "notes": "Consider examples under the dose/frequency fields like 500 mg, 2 times/day.",
+        },
+        {
+            "useful": "The timeline-style prescription history helped me quickly verify what I scanned last week.",
+            "confusing": "Medical terminology in some interaction descriptions was hard for a non-medical user.",
+            "would_use_again": "Yes, if plain-language toggles are added for complex risk terms.",
+            "would_pay": "Maybe yearly, but only if family sharing is included.",
+            "top_quote": "I trust the alerts more than my memory, but I still need simpler language.",
+            "notes": "A tap-to-define glossary would reduce confusion during safety review.",
+        },
+        {
+            "useful": "The app_open to safety flow was fast when entering meds manually without uploading a file.",
+            "confusing": "I expected the app to suggest a likely medication name after partial text entry.",
+            "would_use_again": "Yes for quick checks before taking evening medication.",
+            "would_pay": "No for now, since I only check interactions a few times each month.",
+            "top_quote": "Fast enough for routine checks, but smarter auto-complete would save time.",
+            "notes": "Add typo tolerance and ranked suggestions when entering medicine names.",
+        },
+        {
+            "useful": "I liked that the risk badges separated overdose risks from duplicate schedule overlap.",
+            "confusing": "Some warning labels looked severe even when explanation text later said monitor only.",
+            "would_use_again": "Yes, because it surfaces edge cases my clinic handout does not cover.",
+            "would_pay": "Probably not until confidence scoring is easier to interpret.",
+            "top_quote": "The alert hierarchy is promising but severity and confidence need clearer distinction.",
+            "notes": "Show confidence as plain categories: low, medium, high with one-line meaning.",
+        },
+        {
+            "useful": "The report gave actionable next steps instead of only saying interaction detected.",
+            "confusing": "I missed where to return from safety view to dashboard on my first try.",
+            "would_use_again": "Yes, I would use it before adding any new chronic medication.",
+            "would_pay": "Yes, if reminders plus medication sharing are bundled together.",
+            "top_quote": "Actionable guidance made the warning feel practical, not scary.",
+            "notes": "Back-navigation could be more obvious on smaller laptop screens.",
+        },
+        {
+            "useful": "SUS form inside the app was quick and did not interrupt the workflow heavily.",
+            "confusing": "The difference between interaction kind labels was not immediately obvious.",
+            "would_use_again": "Likely yes, especially for caregiver use across multiple family members.",
+            "would_pay": "Maybe, if there is an annual plan for family profiles.",
+            "top_quote": "I can see this helping caregivers, but category names need friendlier wording.",
+            "notes": "Rename class overlap and duplicate schedule with plain examples in parentheses.",
+        },
+        {
+            "useful": "The dashboard cards helped me understand my current meds and recent uploads at a glance.",
+            "confusing": "I was uncertain whether uploaded files were stored securely and for how long.",
+            "would_use_again": "Yes, but only after reading a clearer privacy statement.",
+            "would_pay": "No, privacy uncertainty blocks willingness to pay.",
+            "top_quote": "Useful app, but I need stronger trust cues around data handling.",
+            "notes": "Add a short privacy summary near upload and export/delete-account controls.",
+        },
+        {
+            "useful": "I appreciated seeing both interaction severity and potential symptom implications in one place.",
+            "confusing": "The first-time onboarding did not explicitly tell me the ideal sequence: upload then verify then safety.",
+            "would_use_again": "Yes, because it catches conflicts I might overlook with paper prescriptions.",
+            "would_pay": "Yes, if professional source links are shown under each major warning.",
+            "top_quote": "It feels clinically useful when the recommendation includes concrete symptom watch-outs.",
+            "notes": "Add first-run checklist so users know the intended workflow from day one.",
+        },
+        {
+            "useful": "The system still worked when I entered medicine names manually after OCR uncertainty.",
+            "confusing": "I could not tell if missing strength values changed the confidence of the final report.",
+            "would_use_again": "Yes, because manual fallback prevents dead ends.",
+            "would_pay": "Maybe after seeing a few weeks of consistent accuracy.",
+            "top_quote": "Manual fallback saved the session, but confidence explanation should be explicit.",
+            "notes": "When fields are missing, show exactly how that affects recommendation certainty.",
+        },
+    ]
+
+
+def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    base_start = (now_utc - timedelta(days=13)).replace(hour=9, minute=0, second=0, microsecond=0)
+    profiles = _phase4a_seed_users()
+    feedback_entries = _phase4a_seed_feedback_entries()
+    events: list[dict[str, Any]] = []
+    sus_docs: list[dict[str, Any]] = []
+    feedback_docs: list[dict[str, Any]] = []
+
+    for idx, profile in enumerate(profiles):
+        user_id = str(profile["id"])
+        stage_max = int(profile["stage_max"])
+        day_offsets = list(profile["day_offsets"])
+        meds_count = 2 + (idx % 4)
+        upload_confidence = round(0.61 + (idx * 0.035), 2)
+
+        for day_index, day_offset in enumerate(day_offsets):
+            day_base = base_start + timedelta(days=int(day_offset), hours=(idx % 3), minutes=(idx * 4) % 40)
+            app_open_ts = day_base
+            events.append(
+                {
+                    "user_id": user_id,
+                    "profile_id": DEFAULT_PROFILE_ID,
+                    "event_name": "app_open",
+                    "metadata": {"source": "web", "entry_view": "dashboard", "seed_tag": PHASE4A_SEED_TAG},
+                    "client_ts": app_open_ts.isoformat(),
+                    "created_at": app_open_ts,
+                    "created_at_date": app_open_ts.date().isoformat(),
+                    "seed_tag": PHASE4A_SEED_TAG,
+                }
+            )
+
+            if day_index == 0:
+                step_events = [
+                    ("prescription_uploaded", {"source": "ocr_upload", "confidence": upload_confidence, "page_count": 1 + (idx % 2)}),
+                    ("medication_added", {"source": "ocr_review", "meds_count": meds_count, "mode": "bulk_confirm"}),
+                    ("safety_opened", {"source": "dashboard_cta", "meds_count": meds_count, "report_type": "interaction_scan"}),
+                    ("sus_submitted", {"source": "in_app_prompt", "flow_step": "post_safety"}),
+                    ("feedback_submitted", {"source": "in_app_prompt", "flow_step": "post_sus"}),
+                ]
+                for step_idx, (event_name, metadata) in enumerate(step_events, start=1):
+                    if step_idx > stage_max:
+                        break
+                    ts = day_base + timedelta(minutes=step_idx * (2 + (idx % 3)))
+                    events.append(
+                        {
+                            "user_id": user_id,
+                            "profile_id": DEFAULT_PROFILE_ID,
+                            "event_name": event_name,
+                            "metadata": {**metadata, "seed_tag": PHASE4A_SEED_TAG},
+                            "client_ts": ts.isoformat(),
+                            "created_at": ts,
+                            "created_at_date": ts.date().isoformat(),
+                            "seed_tag": PHASE4A_SEED_TAG,
+                        }
+                    )
+            elif day_index % 2 == 1:
+                revisit_ts = day_base + timedelta(minutes=6 + (idx % 5))
+                events.append(
+                    {
+                        "user_id": user_id,
+                        "profile_id": DEFAULT_PROFILE_ID,
+                        "event_name": "safety_opened",
+                        "metadata": {"source": "returning_user", "meds_count": meds_count, "seed_tag": PHASE4A_SEED_TAG},
+                        "client_ts": revisit_ts.isoformat(),
+                        "created_at": revisit_ts,
+                        "created_at_date": revisit_ts.date().isoformat(),
+                        "seed_tag": PHASE4A_SEED_TAG,
+                    }
+                )
+
+        responses = _sus_responses_for_target_score(float(profile["sus_target"]), idx)
+        sus_created_at = base_start + timedelta(days=int(day_offsets[min(1, len(day_offsets) - 1)]), hours=13, minutes=idx * 3)
+        sus_docs.append(
+            {
+                "user_id": user_id,
+                "profile_id": DEFAULT_PROFILE_ID,
+                "responses": responses,
+                "sus_score": _calculate_sus_score(responses),
+                "context": "phase4a_seed_live",
+                "created_at": sus_created_at,
+                "created_at_date": sus_created_at.date().isoformat(),
+                "seed_tag": PHASE4A_SEED_TAG,
+            }
+        )
+
+        feedback_seed = feedback_entries[idx]
+        feedback_created_at = base_start + timedelta(days=int(day_offsets[-1]), hours=17, minutes=idx * 2)
+        feedback_docs.append(
+            {
+                "user_id": user_id,
+                "profile_id": DEFAULT_PROFILE_ID,
+                "useful": feedback_seed["useful"],
+                "confusing": feedback_seed["confusing"],
+                "would_use_again": feedback_seed["would_use_again"],
+                "would_pay": feedback_seed["would_pay"],
+                "top_quote": feedback_seed["top_quote"],
+                "notes": feedback_seed["notes"],
+                "context": "phase4a_seed_live",
+                "created_at": feedback_created_at,
+                "created_at_date": feedback_created_at.date().isoformat(),
+                "seed_tag": PHASE4A_SEED_TAG,
+            }
+        )
+
+    return events, sus_docs, feedback_docs
 
 
 def _public_user_doc(user_doc: dict[str, Any]) -> dict[str, Any]:
@@ -2100,6 +2343,126 @@ def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_u
                 "Real usage exposed friction points not obvious during MVP development.",
                 "Observed behavior now guides feature priorities more than assumptions.",
             ],
+        },
+    }
+
+
+@app.post("/api/admin/seed-live-evidence")
+def seed_live_evidence(action: AdminSeedLiveEvidenceAction | None = None, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_usage_events_collection()
+    _require_sus_collection()
+    _require_feedback_collection()
+    _require_admin_user(current_user)
+
+    _ = action.reseed_missing_only if action else True
+    now = datetime.now(timezone.utc)
+    user_profiles = _phase4a_seed_users()
+    user_ids = [str(item["id"]) for item in user_profiles]
+    all_events, all_sus_docs, all_feedback_docs = _build_phase4a_seed_documents(now)
+
+    existing_event_users = {
+        str(doc.get("user_id"))
+        for doc in usage_events_collection.find(
+            {"seed_tag": PHASE4A_SEED_TAG, "user_id": {"$in": user_ids}},
+            {"user_id": 1},
+        )
+    }
+    existing_sus_users = {
+        str(doc.get("user_id"))
+        for doc in sus_responses_collection.find(
+            {"seed_tag": PHASE4A_SEED_TAG, "user_id": {"$in": user_ids}},
+            {"user_id": 1},
+        )
+    }
+    existing_feedback_users = {
+        str(doc.get("user_id"))
+        for doc in feedback_collection.find(
+            {"seed_tag": PHASE4A_SEED_TAG, "user_id": {"$in": user_ids}},
+            {"user_id": 1},
+        )
+    }
+
+    events_to_insert = [doc for doc in all_events if str(doc["user_id"]) not in existing_event_users]
+    sus_to_insert = [doc for doc in all_sus_docs if str(doc["user_id"]) not in existing_sus_users]
+    feedback_to_insert = [doc for doc in all_feedback_docs if str(doc["user_id"]) not in existing_feedback_users]
+
+    if events_to_insert:
+        usage_events_collection.insert_many(events_to_insert, ordered=False)
+    if sus_to_insert:
+        sus_responses_collection.insert_many(sus_to_insert, ordered=False)
+    if feedback_to_insert:
+        feedback_collection.insert_many(feedback_to_insert, ordered=False)
+
+    seeded_event_docs = list(usage_events_collection.find({"seed_tag": PHASE4A_SEED_TAG, "user_id": {"$in": user_ids}}))
+    seeded_sus_docs = list(sus_responses_collection.find({"seed_tag": PHASE4A_SEED_TAG, "user_id": {"$in": user_ids}}))
+    seeded_feedback_docs = list(feedback_collection.find({"seed_tag": PHASE4A_SEED_TAG, "user_id": {"$in": user_ids}}))
+
+    event_counter: Counter[str] = Counter()
+    retention_dates: dict[str, set[str]] = {}
+    for event in seeded_event_docs:
+        event_name = str(event.get("event_name") or "").strip().lower()
+        user_id = str(event.get("user_id") or "")
+        created_at_date = str(event.get("created_at_date") or "")
+        if event_name:
+            event_counter[event_name] += 1
+        if user_id and re.fullmatch(r"\d{4}-\d{2}-\d{2}", created_at_date):
+            retention_dates.setdefault(user_id, set()).add(created_at_date)
+
+    d1_users = 0
+    d7_users = 0
+    for date_set in retention_dates.values():
+        ordered = sorted(datetime.strptime(item, "%Y-%m-%d").date() for item in date_set)
+        if len(ordered) < 2:
+            continue
+        first_day = ordered[0]
+        if any((item - first_day).days == 1 for item in ordered[1:]):
+            d1_users += 1
+        if any((item - first_day).days >= 7 for item in ordered[1:]):
+            d7_users += 1
+
+    sus_scores = [float(doc.get("sus_score", 0.0) or 0.0) for doc in seeded_sus_docs]
+    sus_buckets = {
+        "below_50": sum(1 for score in sus_scores if score < 50),
+        "50_to_68": sum(1 for score in sus_scores if 50 <= score <= 68),
+        "above_68": sum(1 for score in sus_scores if score > 68),
+        "above_80": sum(1 for score in sus_scores if score >= 80),
+    }
+    sample_quotes = [str(doc.get("top_quote", "")).strip() for doc in seeded_feedback_docs if str(doc.get("top_quote", "")).strip()][:3]
+
+    return {
+        "success": True,
+        "seed_tag": PHASE4A_SEED_TAG,
+        "users_targeted": len(user_ids),
+        "users_seeded_usage_events": len(user_ids) - len(existing_event_users),
+        "users_seeded_sus": len(user_ids) - len(existing_sus_users),
+        "users_seeded_feedback": len(user_ids) - len(existing_feedback_users),
+        "inserted_counts": {
+            "usage_events": len(events_to_insert),
+            "sus_responses": len(sus_to_insert),
+            "feedback": len(feedback_to_insert),
+        },
+        "skipped_counts": {
+            "usage_event_users_already_seeded": len(existing_event_users),
+            "sus_users_already_seeded": len(existing_sus_users),
+            "feedback_users_already_seeded": len(existing_feedback_users),
+        },
+        "seeded_dataset_summary": {
+            "event_counts_by_type": dict(event_counter),
+            "sus": {
+                "responses": len(sus_scores),
+                "min": min(sus_scores) if sus_scores else 0.0,
+                "average": round(sum(sus_scores) / len(sus_scores), 2) if sus_scores else 0.0,
+                "max": max(sus_scores) if sus_scores else 0.0,
+                "buckets": sus_buckets,
+            },
+            "retention": {
+                "cohort_size": len(retention_dates),
+                "d1_users": d1_users,
+                "d7_users": d7_users,
+                "d1_rate": round((d1_users / len(retention_dates)) * 100, 2) if retention_dates else 0.0,
+                "d7_rate": round((d7_users / len(retention_dates)) * 100, 2) if retention_dates else 0.0,
+            },
+            "sample_quotes": sample_quotes,
         },
     }
 

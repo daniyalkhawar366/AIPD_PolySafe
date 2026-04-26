@@ -7,8 +7,11 @@ const AdminEvidenceView = ({
   analytics,
   slideSummary,
   loading,
+  seedLoading,
+  seedInfo,
   error,
   onRefresh,
+  onSeed,
 }) => {
   const kpis = analytics?.kpis || {};
   const liveSummary = analytics?.live_summary || {};
@@ -33,13 +36,23 @@ const AdminEvidenceView = ({
               type="button"
               onClick={onRefresh}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              disabled={loading}
+              disabled={loading || seedLoading}
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </button>
+            <button
+              type="button"
+              onClick={onSeed}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={loading || seedLoading}
+            >
+              <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
+              Seed Live Evidence
+            </button>
           </div>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+          {seedInfo && <p className="mt-3 text-sm text-emerald-700">{seedInfo}</p>}
         </GlassCard>
 
         <section className="grid grid-cols-1 md:grid-cols-4 gap-3">
