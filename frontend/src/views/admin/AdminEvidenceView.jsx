@@ -136,8 +136,12 @@ const AdminEvidenceView = ({
   };
 
   const kpis = analytics?.kpis || {};
+  const autoKpis = analytics?.auto_kpis || {};
   const sus = analytics?.sus || {};
+  const autoSus = analytics?.auto_sus || {};
   const funnel = analytics?.funnel || {};
+  const autoFunnel = analytics?.auto_funnel || {};
+  const retention = analytics?.retention || {};
   const tasks = analytics?.tasks || [];
   const confusions = analytics?.friction?.top_confusion_tags || [];
   const quotes = analytics?.qualitative?.top_quotes || [];
@@ -181,6 +185,13 @@ const AdminEvidenceView = ({
           <GlassCard className="p-4"><p className="text-xs text-slate-500">Avg SUS</p><p className="text-2xl font-bold">{kpis.avg_sus || 0}</p></GlassCard>
         </section>
 
+        <section className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <GlassCard className="p-4"><p className="text-xs text-slate-500">Live active users</p><p className="text-2xl font-bold">{autoKpis.active_users || 0}</p></GlassCard>
+          <GlassCard className="p-4"><p className="text-xs text-slate-500">Tracked events</p><p className="text-2xl font-bold">{autoKpis.events_tracked || 0}</p></GlassCard>
+          <GlassCard className="p-4"><p className="text-xs text-slate-500">In-app SUS responses</p><p className="text-2xl font-bold">{autoKpis.sus_responses || 0}</p></GlassCard>
+          <GlassCard className="p-4"><p className="text-xs text-slate-500">In-app Avg SUS</p><p className="text-2xl font-bold">{autoKpis.auto_avg_sus || 0}</p></GlassCard>
+        </section>
+
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <GlassCard className="p-4">
             <h3 className="text-lg font-semibold">Funnel</h3>
@@ -207,6 +218,37 @@ const AdminEvidenceView = ({
               <p>50 to 68: {sus.buckets?.['50_to_68'] || 0}</p>
               <p>Above 68: {sus.buckets?.above_68 || 0}</p>
               <p>80+: {sus.buckets?.above_80 || 0}</p>
+            </div>
+            <p className="text-sm text-slate-600 mt-4">Live SUS: avg {autoSus.average || 0}, min {autoSus.min || 0}, max {autoSus.max || 0}</p>
+          </GlassCard>
+        </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <GlassCard className="p-4">
+            <h3 className="text-lg font-semibold">Live App Funnel</h3>
+            <div className="mt-3 space-y-2">
+              {Object.entries(autoFunnel.counts || {}).map(([step, count]) => (
+                <div key={step}>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="capitalize">{step.replace('_', ' ')}</span>
+                    <span>{count} ({autoFunnel.conversion_percent?.[step] || 0}%)</span>
+                  </div>
+                  <div className="h-2 rounded bg-slate-100 mt-1">
+                    <div className="h-2 rounded bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, autoFunnel.conversion_percent?.[step] || 0))}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
+
+          <GlassCard className="p-4">
+            <h3 className="text-lg font-semibold">Retention (D1 / D7)</h3>
+            <p className="text-sm text-slate-600 mt-1">Cohort size: {retention.cohort_size || 0} users</p>
+            <div className="mt-3 space-y-2 text-sm">
+              <p>D1 retained users: {retention.d1_users || 0}</p>
+              <p>D1 retention rate: {retention.d1_rate || 0}%</p>
+              <p>D7 retained users: {retention.d7_users || 0}</p>
+              <p>D7 retention rate: {retention.d7_rate || 0}%</p>
             </div>
           </GlassCard>
         </section>

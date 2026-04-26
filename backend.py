@@ -82,6 +82,8 @@ prescriptions_collection = None
 share_links_collection = None
 reminders_collection = None
 test_sessions_collection = None
+usage_events_collection = None
+sus_responses_collection = None
 if MONGO_URI:
     try:
         mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=4000)
@@ -92,6 +94,8 @@ if MONGO_URI:
         share_links_collection = mongo_db["share_links"]
         reminders_collection = mongo_db["reminders"]
         test_sessions_collection = mongo_db["test_sessions"]
+        usage_events_collection = mongo_db["usage_events"]
+        sus_responses_collection = mongo_db["sus_responses"]
         users_collection.create_index("email", unique=True)
         medications_collection.create_index([("user_id", 1), ("rxcui", 1)])
         medications_collection.create_index([("user_id", 1), ("drug_name", 1)])
@@ -103,6 +107,9 @@ if MONGO_URI:
         reminders_collection.create_index([("enabled", 1), ("next_send_at", 1)])
         test_sessions_collection.create_index([("created_by", 1), ("session_date", -1)])
         test_sessions_collection.create_index([("tester_label", 1), ("session_date", -1)])
+        usage_events_collection.create_index([("user_id", 1), ("event_name", 1), ("created_at", -1)])
+        usage_events_collection.create_index([("event_name", 1), ("created_at", -1)])
+        sus_responses_collection.create_index([("user_id", 1), ("created_at", -1)])
     except PyMongoError:
         users_collection = None
         medications_collection = None
@@ -110,6 +117,8 @@ if MONGO_URI:
         share_links_collection = None
         reminders_collection = None
         test_sessions_collection = None
+        usage_events_collection = None
+        sus_responses_collection = None
 
 # Enable CORS for React
 app.add_middleware(
@@ -265,6 +274,17 @@ class TestSessionAction(BaseModel):
     funnel: TestFunnelAction = Field(default_factory=TestFunnelAction)
     sus_responses: list[int] = Field(default_factory=list, min_length=10, max_length=10)
     reflection: TestReflectionAction = Field(default_factory=TestReflectionAction)
+
+
+class UsageEventAction(BaseModel):
+    event_name: str = Field(min_length=2, max_length=80)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    client_ts: str = Field(default="")
+
+
+class SusSubmissionAction(BaseModel):
+    responses: list[int] = Field(min_length=10, max_length=10)
+    context: str = Field(default="general", max_length=60)
 
 
 ALLOWED_ROLES = {"patient", "caregiver"}
@@ -615,6 +635,22 @@ def _require_reminders_collection():
 
 def _require_test_sessions_collection():
     if test_sessions_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
+        )
+
+
+def _require_usage_events_collection():
+    if usage_events_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
+        )
+
+
+def _require_sus_collection():
+    if sus_responses_collection is None:
         raise HTTPException(
             status_code=503,
             detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
@@ -1982,6 +2018,54 @@ def update_my_reminders(action: ReminderSettingsAction, current_user: dict[str, 
     }
 
 
+@app.post("/api/me/telemetry")
+def track_usage_event(action: UsageEventAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_usage_events_collection()
+    user_id = _auth_user_scope_id(current_user)
+    profile_id = _active_profile_id(current_user)
+    now = datetime.now(timezone.utc)
+
+    event_name = str(action.event_name or "").strip().lower().replace(" ", "_")
+    if not re.fullmatch(r"[a-z0-9_]{2,80}", event_name):
+        raise HTTPException(status_code=400, detail="Invalid event name")
+
+    usage_events_collection.insert_one(
+        {
+            "user_id": user_id,
+            "profile_id": profile_id,
+            "event_name": event_name,
+            "metadata": action.metadata or {},
+            "client_ts": str(action.client_ts or "").strip()[:80],
+            "created_at": now,
+            "created_at_date": now.date().isoformat(),
+        }
+    )
+    return {"success": True}
+
+
+@app.post("/api/me/sus")
+def submit_sus(action: SusSubmissionAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_sus_collection()
+    user_id = _auth_user_scope_id(current_user)
+    profile_id = _active_profile_id(current_user)
+    now = datetime.now(timezone.utc)
+
+    responses = [int(item) for item in action.responses]
+    sus_score = _calculate_sus_score(responses)
+    sus_responses_collection.insert_one(
+        {
+            "user_id": user_id,
+            "profile_id": profile_id,
+            "responses": responses,
+            "sus_score": sus_score,
+            "context": str(action.context or "general").strip()[:60],
+            "created_at": now,
+            "created_at_date": now.date().isoformat(),
+        }
+    )
+    return {"success": True, "sus_score": sus_score}
+
+
 @app.post("/api/admin/test-sessions")
 def create_admin_test_session(action: TestSessionAction, current_user: dict[str, Any] = Depends(get_current_user)):
     _require_users_collection()
@@ -2029,6 +2113,8 @@ def get_admin_test_sessions(current_user: dict[str, Any] = Depends(get_current_u
 def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)):
     _require_users_collection()
     _require_test_sessions_collection()
+    _require_usage_events_collection()
+    _require_sus_collection()
     _require_admin_user(current_user)
 
     sessions = list(test_sessions_collection.find({}))
@@ -2113,6 +2199,62 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
     top_confusions = [{"tag": tag, "count": count} for tag, count in confusion_counter.most_common(10)]
     top_reflection_themes = [{"phrase": phrase, "count": count} for phrase, count in reflection_counter.most_common(8)]
 
+    usage_events = list(usage_events_collection.find({}))
+    event_users: dict[str, set[str]] = {}
+    user_event_dates: dict[str, set[str]] = {}
+    for event in usage_events:
+        user_id = str(event.get("user_id") or "")
+        event_name = str(event.get("event_name") or "").strip().lower()
+        date_value = str(event.get("created_at_date") or "")
+        if not user_id or not event_name:
+            continue
+        event_users.setdefault(event_name, set()).add(user_id)
+        if date_value:
+            user_event_dates.setdefault(user_id, set()).add(date_value)
+
+    funnel_events = [
+        ("started", "app_open"),
+        ("uploaded_prescription", "prescription_uploaded"),
+        ("added_med", "medication_added"),
+        ("opened_safety", "safety_opened"),
+    ]
+    auto_funnel_counts = {key: len(event_users.get(event_name, set())) for key, event_name in funnel_events}
+    auto_started = auto_funnel_counts.get("started", 0)
+    auto_funnel_conversion = {
+        step: round((count / auto_started) * 100, 2) if auto_started else 0.0
+        for step, count in auto_funnel_counts.items()
+    }
+
+    d1_returned = 0
+    d7_returned = 0
+    for date_set in user_event_dates.values():
+        parsed = sorted({datetime.strptime(value, "%Y-%m-%d").date() for value in date_set if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)})
+        if len(parsed) < 2:
+            continue
+        first_day = parsed[0]
+        if any((day - first_day).days == 1 for day in parsed[1:]):
+            d1_returned += 1
+        if any((day - first_day).days >= 7 for day in parsed[1:]):
+            d7_returned += 1
+
+    total_auto_users = len(user_event_dates)
+    retention = {
+        "cohort_size": total_auto_users,
+        "d1_users": d1_returned,
+        "d7_users": d7_returned,
+        "d1_rate": round((d1_returned / total_auto_users) * 100, 2) if total_auto_users else 0.0,
+        "d7_rate": round((d7_returned / total_auto_users) * 100, 2) if total_auto_users else 0.0,
+    }
+
+    sus_docs = list(sus_responses_collection.find({}))
+    auto_sus_scores = [float(doc.get("sus_score", 0.0) or 0.0) for doc in sus_docs]
+    auto_sus = {
+        "responses_count": len(auto_sus_scores),
+        "average": round(sum(auto_sus_scores) / len(auto_sus_scores), 2) if auto_sus_scores else 0.0,
+        "min": min(auto_sus_scores) if auto_sus_scores else 0.0,
+        "max": max(auto_sus_scores) if auto_sus_scores else 0.0,
+    }
+
     return {
         "success": True,
         "kpis": {
@@ -2121,10 +2263,21 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             "avg_session_duration_minutes": avg_duration,
             "avg_sus": sus_average,
         },
+        "auto_kpis": {
+            "active_users": total_auto_users,
+            "events_tracked": len(usage_events),
+            "sus_responses": len(auto_sus_scores),
+            "auto_avg_sus": auto_sus["average"],
+        },
         "funnel": {
             "counts": funnel_counts,
             "conversion_percent": funnel_conversion,
         },
+        "auto_funnel": {
+            "counts": auto_funnel_counts,
+            "conversion_percent": auto_funnel_conversion,
+        },
+        "retention": retention,
         "tasks": task_performance,
         "friction": {
             "top_confusion_tags": top_confusions,
@@ -2136,6 +2289,7 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             "buckets": sus_buckets,
             "scores": sus_scores,
         },
+        "auto_sus": auto_sus,
         "qualitative": {
             "top_quotes": top_quotes[:8],
             "top_reflection_themes": top_reflection_themes,
@@ -2151,8 +2305,12 @@ def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_u
 
     analytics = get_admin_analytics(current_user)
     kpis = analytics.get("kpis", {})
+    auto_kpis = analytics.get("auto_kpis", {})
+    retention = analytics.get("retention", {})
     sus = analytics.get("sus", {})
+    auto_sus = analytics.get("auto_sus", {})
     funnel_counts = (analytics.get("funnel", {}) or {}).get("counts", {})
+    auto_funnel_counts = (analytics.get("auto_funnel", {}) or {}).get("counts", {})
     top_tasks = analytics.get("tasks", [])[:3]
     top_confusions = (analytics.get("friction", {}) or {}).get("top_confusion_tags", [])[:3]
     top_themes = (analytics.get("qualitative", {}) or {}).get("top_reflection_themes", [])[:3]
@@ -2160,6 +2318,8 @@ def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_u
     observations = [
         f"Funnel completion: {funnel_counts.get('finished', 0)} of {funnel_counts.get('started', 0)} sessions reached final step.",
         f"Average SUS score is {sus.get('average', 0)} (min {sus.get('min', 0)}, max {sus.get('max', 0)}).",
+        f"Real app usage: {auto_kpis.get('active_users', 0)} active users and {auto_kpis.get('events_tracked', 0)} tracked events.",
+        f"D1 retention is {retention.get('d1_rate', 0)}% and D7 retention is {retention.get('d7_rate', 0)}%.",
     ]
     if top_tasks:
         observations.append(
@@ -2179,6 +2339,8 @@ def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_u
         insights.append("Usability remains below benchmark (>68), indicating onboarding and flow improvements are needed.")
     else:
         insights.append("Usability is above benchmark, indicating core value is understandable for target users.")
+    if float(auto_sus.get("average", 0) or 0) > 0:
+        insights.append(f"Auto-collected user SUS average is {auto_sus.get('average', 0)}, based on live in-app submissions.")
     insights.append("Behavioral drop-off pinpoints where users needed guidance, helping prioritize next iteration.")
 
     return {

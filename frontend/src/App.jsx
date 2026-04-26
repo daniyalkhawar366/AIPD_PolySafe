@@ -33,6 +33,8 @@ const CACHE_MEDS_KEY = 'polysafe_cache_meds';
 const CACHE_PRESCRIPTIONS_KEY = 'polysafe_cache_prescriptions';
 const CACHE_SAFETY_KEY = 'polysafe_cache_safety';
 const CACHE_MED_USE_KEY = 'polysafe_cache_med_use';
+const SUS_SUBMITTED_KEY = 'polysafe_sus_submitted';
+const APP_OPEN_TRACK_KEY = 'polysafe_app_open_tracked_date';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.REACT_APP_GOOGLE_CLIENT_ID || '';
 
 const readCachedMedUse = () => {
@@ -172,6 +174,10 @@ const App = () => {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminSaving, setAdminSaving] = useState(false);
   const [adminError, setAdminError] = useState('');
+  const [susModalOpen, setSusModalOpen] = useState(false);
+  const [susResponses, setSusResponses] = useState(Array(10).fill(3));
+  const [susSubmitting, setSusSubmitting] = useState(false);
+  const [susInfo, setSusInfo] = useState('');
   const [manualDrugName, setManualDrugName] = useState('');
   const [manualDrugType, setManualDrugType] = useState(MANUAL_SOURCE_DEFAULT);
   const [manualDose, setManualDose] = useState('');
@@ -476,6 +482,40 @@ const App = () => {
     }
   };
 
+  const trackUsageEvent = async (eventName, metadata = {}) => {
+    if (!currentUser || !authHydrated) return;
+    try {
+      await axios.post(`${API_BASE}/me/telemetry`, {
+        event_name: eventName,
+        metadata,
+        client_ts: new Date().toISOString(),
+      }, getAuthConfig(token));
+    } catch {
+      // silent fail: analytics should never block user flow
+    }
+  };
+
+  const getSusStorageKey = () => `${SUS_SUBMITTED_KEY}_${String(currentUser?.email || '').toLowerCase()}`;
+
+  const submitSusSurvey = async () => {
+    setSusSubmitting(true);
+    setSusInfo('');
+    try {
+      const res = await axios.post(`${API_BASE}/me/sus`, {
+        responses: susResponses.map((value) => Number(value || 3)),
+        context: 'in_app_prompt',
+      }, getAuthConfig(token));
+      localStorage.setItem(getSusStorageKey(), '1');
+      setSusInfo(`Thanks. SUS submitted successfully (score: ${res.data?.sus_score ?? 'saved'}).`);
+      setSusModalOpen(false);
+      await trackUsageEvent('sus_submitted', { source: 'in_app_prompt' });
+    } catch (err) {
+      setSusInfo(err?.response?.data?.detail || 'Could not submit SUS right now.');
+    } finally {
+      setSusSubmitting(false);
+    }
+  };
+
   const filteredMeds = meds.filter((med) => med.name.toLowerCase().includes(medSearch.trim().toLowerCase()));
   const profileRequired = Boolean(currentUser) && !Boolean(currentUser.profile_completed);
   const navigateToView = (view, options = {}) => {
@@ -647,6 +687,7 @@ const App = () => {
     if (meds.length >= 2 && interactions.length === 0 && !loading) {
       checkSafety();
     }
+    trackUsageEvent('safety_opened', { meds_count: meds.length });
     navigateToView('safety');
   };
 
@@ -664,6 +705,7 @@ const App = () => {
   const activeProfileId = currentUser?.active_profile_id || accountProfiles[0]?.id || 'default';
   const currentAccountEmail = String(currentUser?.email || '').trim().toLowerCase();
   const isAdminUser = Boolean(currentAccountEmail && ADMIN_EMAILS.has(currentAccountEmail));
+  const hasSubmittedSus = Boolean(currentUser && localStorage.getItem(`${SUS_SUBMITTED_KEY}_${currentAccountEmail}`) === '1');
   const canAddMoreMedicines = currentUser?.is_premium || meds.length < FREE_TIER_MED_LIMIT;
 
   const createAdminSession = async (payload) => {
@@ -880,6 +922,20 @@ const App = () => {
     if (activeView !== 'admin') return;
     fetchAdminEvidence();
   }, [activeView, currentUser, isAdminUser]);
+
+  useEffect(() => {
+    if (!currentUser || !authHydrated) return;
+    const todayKey = `${APP_OPEN_TRACK_KEY}_${String(currentUser.email || '').toLowerCase()}`;
+    const today = new Date().toISOString().slice(0, 10);
+    if (localStorage.getItem(todayKey) === today) return;
+    localStorage.setItem(todayKey, today);
+    trackUsageEvent('app_open', { view: activeView });
+  }, [currentUser, authHydrated]);
+
+  useEffect(() => {
+    if (!currentUser || activeView !== 'safety') return;
+    trackUsageEvent('safety_opened', { meds_count: meds.length, from_view_change: true });
+  }, [activeView, currentUser, meds.length]);
 
   useEffect(() => {
     const initialView = getViewFromPath(window.location.pathname);
@@ -1671,6 +1727,10 @@ const App = () => {
       if (res.data?.timings) {
         console.info('Prescription processing timings', res.data.timings);
       }
+      trackUsageEvent('prescription_uploaded', {
+        confidence: Number(res.data?.confidence || 0),
+        extracted_drugs: Array.isArray(res.data?.drugs) ? res.data.drugs.length : 0,
+      });
     } catch (err) {
       setManualError(err.response?.data?.detail || err.response?.data?.message || 'Upload failed. Please check the file and try again.');
     } finally {
@@ -1764,6 +1824,7 @@ const App = () => {
       setManualError('');
       await fetchMeds();
       scheduleSafetyRefresh();
+      trackUsageEvent('medication_added', { source: 'ocr' });
       return { status: 'added', name: drugName };
     } catch (err) {
       if (err.response?.status === 401) {
@@ -1900,6 +1961,7 @@ const App = () => {
       setManualError('');
       await fetchMeds();
       scheduleSafetyRefresh();
+      trackUsageEvent('medication_added', { source: 'manual' });
     } catch (err) {
       if (err.response?.status === 401) {
         await executeLogout();
@@ -2462,6 +2524,23 @@ const App = () => {
               {offlineInfo}
             </div>
           )}
+          {currentUser && !isAdminUser && !hasSubmittedSus && (
+            <div className="mb-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800 flex items-center justify-between gap-3">
+              <span>Help us improve PolySafe: complete the 10-question usability survey (SUS).</span>
+              <button
+                type="button"
+                onClick={() => setSusModalOpen(true)}
+                className="px-2 py-1 rounded border border-indigo-300 text-indigo-700 font-semibold hover:bg-indigo-100"
+              >
+                Take SUS
+              </button>
+            </div>
+          )}
+          {susInfo && (
+            <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              {susInfo}
+            </div>
+          )}
           {profileSwitching ? (
             <div className="h-full w-full max-w-5xl mx-auto space-y-4 animate-pulse">
               <div className="h-24 rounded-2xl bg-slate-200" />
@@ -2633,6 +2712,66 @@ const App = () => {
         premiumPriceUsd={PREMIUM_PRICE_USD}
         onOpenUpgradePage={openUpgradePage}
       />
+
+      <AnimatePresence>
+        {susModalOpen && (
+          <div className="fixed inset-0 z-1210 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !susSubmitting && setSusModalOpen(false)}
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-xl p-5"
+            >
+              <h3 className="text-lg font-semibold text-slate-900">System Usability Scale (SUS)</h3>
+              <p className="text-sm text-slate-600 mt-1">Please rate each item from 1 (strongly disagree) to 5 (strongly agree).</p>
+              <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-2">
+                {susResponses.map((value, idx) => (
+                  <label key={`sus-modal-${idx}`} className="text-xs text-slate-700">
+                    Q{idx + 1}
+                    <input
+                      type="number"
+                      min="1"
+                      max="5"
+                      value={value}
+                      onChange={(e) => {
+                        const next = [...susResponses];
+                        next[idx] = Number(e.target.value || 3);
+                        setSusResponses(next);
+                      }}
+                      className="w-full mt-1 px-2 py-1 rounded border border-slate-300 text-sm"
+                    />
+                  </label>
+                ))}
+              </div>
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSusModalOpen(false)}
+                  disabled={susSubmitting}
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitSusSurvey}
+                  disabled={susSubmitting}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {susSubmitting ? 'Submitting...' : 'Submit SUS'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {accountSwitcherOpen && (
