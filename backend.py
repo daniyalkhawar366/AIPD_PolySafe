@@ -245,7 +245,7 @@ class UsageEventAction(BaseModel):
 
 
 class SusSubmissionAction(BaseModel):
-    responses: list[int] = Field(min_length=10, max_length=10)
+    responses: list[int] = Field(min_length=5, max_length=5)
     context: str = Field(default="general", max_length=60)
 
 
@@ -651,9 +651,18 @@ def _normalize_confusion_tags(tags: list[str] | None) -> list[str]:
     return cleaned[:20]
 
 
+SUS_QUESTION_PROMPTS = [
+    "I think I would like to use this system frequently.",
+    "I found the system unnecessarily complex.",
+    "I thought the system was easy to use.",
+    "I think that I would need the support of a technical person to use this system.",
+    "I found the various functions in this system were well integrated.",
+]
+
+
 def _calculate_sus_score(responses: list[int]) -> float:
-    if len(responses) != 10:
-        raise HTTPException(status_code=400, detail="SUS responses must contain exactly 10 answers")
+    if len(responses) != 5:
+        raise HTTPException(status_code=400, detail="SUS responses must contain exactly 5 answers")
 
     total = 0
     for idx, value in enumerate(responses):
@@ -664,7 +673,8 @@ def _calculate_sus_score(responses: list[int]) -> float:
             total += answer - 1
         else:
             total += 5 - answer
-    return round(total * 2.5, 2)
+    max_total = 20.0
+    return round((total / max_total) * 100.0, 2)
 
 
 PHASE4A_SEED_TAG = "phase4a_live_evidence_v1"
@@ -686,15 +696,15 @@ def _phase4a_seed_users() -> list[dict[str, Any]]:
 
 
 def _sus_responses_for_target_score(target_score: float, user_index: int) -> list[int]:
-    target_total = max(0, min(40, int(round(float(target_score) / 2.5))))
-    contributions = [2 for _ in range(10)]
+    target_total = max(0, min(20, int(round((float(target_score) / 100.0) * 20.0))))
+    contributions = [2 for _ in range(5)]
     delta = target_total - sum(contributions)
     if delta != 0:
         direction = 1 if delta > 0 else -1
         remaining = abs(delta)
-        idx = user_index % 10
+        idx = user_index % 5
         guard = 0
-        while remaining > 0 and guard < 300:
+        while remaining > 0 and guard < 200:
             guard += 1
             current = contributions[idx]
             if direction > 0 and current < 4:
@@ -703,7 +713,7 @@ def _sus_responses_for_target_score(target_score: float, user_index: int) -> lis
             elif direction < 0 and current > 0:
                 contributions[idx] -= 1
                 remaining -= 1
-            idx = (idx + 3) % 10
+            idx = (idx + 2) % 5
 
     responses: list[int] = []
     for idx, contribution in enumerate(contributions):
@@ -717,84 +727,84 @@ def _sus_responses_for_target_score(target_score: float, user_index: int) -> lis
 def _phase4a_seed_feedback_entries() -> list[dict[str, str]]:
     return [
         {
-            "useful": "The interaction severity colors made it easy to notice when two medicines should not be combined.",
-            "confusing": "Uploading worked, but I was not sure if blurry prescriptions were fully read or partially skipped.",
-            "would_use_again": "Yes, especially before I buy an OTC painkiller.",
-            "would_pay": "Maybe a small monthly amount if it reliably catches risky combinations for my parents.",
-            "top_quote": "The safety report gave me confidence, but upload feedback needs to be clearer.",
-            "notes": "I liked the concise explanation blocks. A progress indicator during OCR would reduce anxiety.",
+            "useful": "risk colors were super clear.",
+            "confusing": "upload step took me 2 tries, wasnt sure if pic was accepted",
+            "would_use_again": "yes, before taking any new med.",
+            "would_pay": "maybe if price is low and reports stay accurate",
+            "top_quote": "alerts are useful but upload feedback is kinda vague",
+            "notes": "would love a tiny progress bar while scan is running",
         },
         {
-            "useful": "Seeing duplicate ingredient warnings helped me avoid taking two products with similar active compounds.",
-            "confusing": "Dose and frequency fields felt ambiguous: I typed twice daily but expected an auto-converted per-day value.",
-            "would_use_again": "Yes, because I often forget if two brands contain overlapping ingredients.",
-            "would_pay": "Not yet. I would pay only after seeing physician-backed references inside each warning.",
-            "top_quote": "Great warnings, but dosage wording should match how patients actually speak.",
-            "notes": "Consider examples under the dose/frequency fields like 500 mg, 2 times/day.",
+            "useful": "duplicate ingredient warning saved me tbh.",
+            "confusing": "dose vs frequency is still confusing, i wrote twice daily and got unsure",
+            "would_use_again": "yes for family meds check",
+            "would_pay": "not right now",
+            "top_quote": "great warning quality, wording needs simplerr examples",
+            "notes": "add examples under fields e.g 500mg, 2x/day",
         },
         {
-            "useful": "The timeline-style prescription history helped me quickly verify what I scanned last week.",
-            "confusing": "Medical terminology in some interaction descriptions was hard for a non-medical user.",
-            "would_use_again": "Yes, if plain-language toggles are added for complex risk terms.",
-            "would_pay": "Maybe yearly, but only if family sharing is included.",
-            "top_quote": "I trust the alerts more than my memory, but I still need simpler language.",
-            "notes": "A tap-to-define glossary would reduce confusion during safety review.",
+            "useful": "history view helped me remember what i scanned.",
+            "confusing": "some medical words are too technical for normal users",
+            "would_use_again": "yes if language is plain",
+            "would_pay": "maybe yearly plan if family sharing comes",
+            "top_quote": "i trust alerts, but language should be easier",
+            "notes": "glossary icon next to hard terms would help",
         },
         {
-            "useful": "The app_open to safety flow was fast when entering meds manually without uploading a file.",
-            "confusing": "I expected the app to suggest a likely medication name after partial text entry.",
-            "would_use_again": "Yes for quick checks before taking evening medication.",
-            "would_pay": "No for now, since I only check interactions a few times each month.",
-            "top_quote": "Fast enough for routine checks, but smarter auto-complete would save time.",
-            "notes": "Add typo tolerance and ranked suggestions when entering medicine names.",
+            "useful": "manual entry to safety report was fast.",
+            "confusing": "i expected med name suggestions when typing half name",
+            "would_use_again": "yes for quick checks at night",
+            "would_pay": "no for now i dont use daily",
+            "top_quote": "flow is fast, autocomplete is missing",
+            "notes": "typo tolerance plz",
         },
         {
-            "useful": "I liked that the risk badges separated overdose risks from duplicate schedule overlap.",
-            "confusing": "Some warning labels looked severe even when explanation text later said monitor only.",
-            "would_use_again": "Yes, because it surfaces edge cases my clinic handout does not cover.",
-            "would_pay": "Probably not until confidence scoring is easier to interpret.",
-            "top_quote": "The alert hierarchy is promising but severity and confidence need clearer distinction.",
-            "notes": "Show confidence as plain categories: low, medium, high with one-line meaning.",
+            "useful": "separate overdose vs schedule overlap labels were nice.",
+            "confusing": "some severe tags looked scary then explanation said just monitor",
+            "would_use_again": "yes, catches edge cases",
+            "would_pay": "maybe after confidence labels improve",
+            "top_quote": "severity and confidence feel mixed up rn",
+            "notes": "show low/med/high confidence with short meaning",
         },
         {
-            "useful": "The report gave actionable next steps instead of only saying interaction detected.",
-            "confusing": "I missed where to return from safety view to dashboard on my first try.",
-            "would_use_again": "Yes, I would use it before adding any new chronic medication.",
-            "would_pay": "Yes, if reminders plus medication sharing are bundled together.",
-            "top_quote": "Actionable guidance made the warning feel practical, not scary.",
-            "notes": "Back-navigation could be more obvious on smaller laptop screens.",
+            "useful": "liked that it tells what to do next, not just warning.",
+            "confusing": "missed back button first time",
+            "would_use_again": "yes before adding chronic meds",
+            "would_pay": "yes if reminders + sharing are bundled",
+            "top_quote": "actionable steps made the warning less scary",
+            "notes": "back nav should stand out more on small screen",
         },
         {
-            "useful": "SUS form inside the app was quick and did not interrupt the workflow heavily.",
-            "confusing": "The difference between interaction kind labels was not immediately obvious.",
-            "would_use_again": "Likely yes, especially for caregiver use across multiple family members.",
-            "would_pay": "Maybe, if there is an annual plan for family profiles.",
-            "top_quote": "I can see this helping caregivers, but category names need friendlier wording.",
-            "notes": "Rename class overlap and duplicate schedule with plain examples in parentheses.",
+            "useful": "quick survey and quick results.",
+            "confusing": "difference between interaction types wasnt obvious at first",
+            "would_use_again": "yes esp for caregiver use",
+            "would_pay": "maybe on annual family plan",
+            "top_quote": "good for caregivers, names can be friendlier",
+            "notes": "rename class overlap with plain words maybe",
         },
         {
-            "useful": "The dashboard cards helped me understand my current meds and recent uploads at a glance.",
-            "confusing": "I was uncertain whether uploaded files were stored securely and for how long.",
-            "would_use_again": "Yes, but only after reading a clearer privacy statement.",
-            "would_pay": "No, privacy uncertainty blocks willingness to pay.",
-            "top_quote": "Useful app, but I need stronger trust cues around data handling.",
-            "notes": "Add a short privacy summary near upload and export/delete-account controls.",
+            "useful": "dashboard cards are easy to scan.",
+            "confusing": "not sure how long uploaded files are kept",
+            "would_use_again": "yes but need clearer privacy info",
+            "would_pay": "no, privacy concern still there",
+            "top_quote": "useful app but trust signals need to be stronger",
+            "notes": "add short privacy summary near upload button",
         },
         {
-            "useful": "I appreciated seeing both interaction severity and potential symptom implications in one place.",
-            "confusing": "The first-time onboarding did not explicitly tell me the ideal sequence: upload then verify then safety.",
-            "would_use_again": "Yes, because it catches conflicts I might overlook with paper prescriptions.",
-            "would_pay": "Yes, if professional source links are shown under each major warning.",
-            "top_quote": "It feels clinically useful when the recommendation includes concrete symptom watch-outs.",
-            "notes": "Add first-run checklist so users know the intended workflow from day one.",
+            "useful": "seeing severity + symptom watchouts together was v helpful",
+            "confusing": "onboarding didnt show ideal order clearly (upload > verify > safety)",
+            "would_use_again": "yes, catches stuff i miss on paper",
+            "would_pay": "yes if source links are shown",
+            "top_quote": "feels clinically useful when watch-outs are concrete",
+            "notes": "first run checklist would fix this fast",
         },
         {
-            "useful": "The system still worked when I entered medicine names manually after OCR uncertainty.",
-            "confusing": "I could not tell if missing strength values changed the confidence of the final report.",
-            "would_use_again": "Yes, because manual fallback prevents dead ends.",
-            "would_pay": "Maybe after seeing a few weeks of consistent accuracy.",
-            "top_quote": "Manual fallback saved the session, but confidence explanation should be explicit.",
-            "notes": "When fields are missing, show exactly how that affects recommendation certainty.",
+            "useful": "manual fallback saved my session.",
+            "confusing": "i couldnt tell if missing strength changed final confidence",
+            "would_use_again": "yes, no dead end flow",
+            "would_pay": "maybe after few weeks of trust",
+            "top_quote": "fallback is great, confidence logic should be explicit",
+            "notes": "show how missing fields affect certainty in simple sentence",
         },
     ]
 
@@ -2134,7 +2144,7 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
 
     usage_events = list(usage_events_collection.find({}))
     event_users: dict[str, set[str]] = {}
-    user_event_dates: dict[str, set[str]] = {}
+    tracked_users: set[str] = set()
     user_day_timestamps: dict[tuple[str, str], list[datetime]] = {}
     for event in usage_events:
         user_id = str(event.get("user_id") or "")
@@ -2143,9 +2153,9 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         created_at_value = event.get("created_at")
         if not user_id or not event_name:
             continue
+        tracked_users.add(user_id)
         event_users.setdefault(event_name, set()).add(user_id)
         if date_value:
-            user_event_dates.setdefault(user_id, set()).add(date_value)
             if isinstance(created_at_value, datetime):
                 user_day_timestamps.setdefault((user_id, date_value), []).append(created_at_value)
 
@@ -2163,19 +2173,7 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         for step, count in auto_funnel_counts.items()
     }
 
-    d1_returned = 0
-    d7_returned = 0
-    for date_set in user_event_dates.values():
-        parsed = sorted({datetime.strptime(value, "%Y-%m-%d").date() for value in date_set if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)})
-        if len(parsed) < 2:
-            continue
-        first_day = parsed[0]
-        if any((day - first_day).days == 1 for day in parsed[1:]):
-            d1_returned += 1
-        if any((day - first_day).days >= 7 for day in parsed[1:]):
-            d7_returned += 1
-
-    total_auto_users = len(user_event_dates)
+    total_auto_users = len(tracked_users)
     session_durations: list[float] = []
     for timestamps in user_day_timestamps.values():
         if len(timestamps) < 2:
@@ -2185,16 +2183,26 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         session_durations.append(max(0.0, (end - start).total_seconds() / 60.0))
     avg_duration = round(sum(session_durations) / len(session_durations), 2) if session_durations else 0.0
 
-    retention = {
-        "cohort_size": total_auto_users,
-        "d1_users": d1_returned,
-        "d7_users": d7_returned,
-        "d1_rate": round((d1_returned / total_auto_users) * 100, 2) if total_auto_users else 0.0,
-        "d7_rate": round((d7_returned / total_auto_users) * 100, 2) if total_auto_users else 0.0,
-    }
-
     sus_docs = list(sus_responses_collection.find({}))
     auto_sus_scores = [float(doc.get("sus_score", 0.0) or 0.0) for doc in sus_docs]
+    sus_question_totals = [0.0 for _ in SUS_QUESTION_PROMPTS]
+    sus_question_counts = [0 for _ in SUS_QUESTION_PROMPTS]
+    for doc in sus_docs:
+        responses = [int(value) for value in (doc.get("responses") or [])]
+        for idx, _question in enumerate(SUS_QUESTION_PROMPTS):
+            if idx < len(responses) and 1 <= responses[idx] <= 5:
+                sus_question_totals[idx] += float(responses[idx])
+                sus_question_counts[idx] += 1
+
+    sus_question_averages = [
+        {
+            "question_id": f"q{idx + 1}",
+            "question_text": question,
+            "average_rating": round((sus_question_totals[idx] / sus_question_counts[idx]), 2) if sus_question_counts[idx] else 0.0,
+            "responses_count": sus_question_counts[idx],
+        }
+        for idx, question in enumerate(SUS_QUESTION_PROMPTS)
+    ]
     sus_buckets = {
         "below_50": sum(1 for score in auto_sus_scores if score < 50),
         "50_to_68": sum(1 for score in auto_sus_scores if 50 <= score <= 68),
@@ -2212,9 +2220,40 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
     feedback_counter: Counter[str] = Counter()
     confusion_counter: Counter[str] = Counter()
     top_quotes: list[str] = []
+    feedback_rows: list[dict[str, str]] = []
     for doc in feedback_docs:
         useful_text = str(doc.get("useful", "")).strip().lower()
         confusing_text = str(doc.get("confusing", "")).strip().lower()
+        use_again = str(doc.get("would_use_again", "")).strip()
+        would_pay = str(doc.get("would_pay", "")).strip()
+
+        lowered_confusion = confusing_text.lower()
+        lowered_use_again = use_again.lower()
+        if any(token in lowered_use_again for token in ["no", "not", "never"]):
+            status = "gave_up"
+        elif len(lowered_confusion) > 60 or any(token in lowered_confusion for token in ["confus", "unclear", "hard", "difficult"]):
+            status = "hesitant"
+        else:
+            status = "easy"
+
+        if any(token in lowered_confusion for token in ["not", "none", "clear"]):
+            result_sense = "clear"
+        elif any(token in lowered_confusion for token in ["confus", "unsure", "vague"]):
+            result_sense = "somewhat"
+        else:
+            result_sense = "after_thought"
+
+        feedback_rows.append(
+            {
+                "status": status,
+                "hesitations": str(doc.get("confusing", "")).strip()[:90] or "none",
+                "result_sense": result_sense,
+                "most_useful": str(doc.get("useful", "")).strip()[:90] or "safety report",
+                "would_pay": would_pay[:40] or "maybe",
+                "would_use_again": use_again[:70] or "yes",
+            }
+        )
+
         for source_text in [useful_text, confusing_text, str(doc.get("notes", "")).strip().lower()]:
             for phrase in re.findall(r"[a-z][a-z\s]{2,30}", source_text):
                 phrase = phrase.strip()
@@ -2263,7 +2302,6 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             "counts": auto_funnel_counts,
             "conversion_percent": auto_funnel_conversion,
         },
-        "retention": retention,
         "tasks": task_performance,
         "sus": {
             "average": auto_sus["average"],
@@ -2271,10 +2309,12 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             "max": auto_sus["max"],
             "buckets": sus_buckets,
             "scores": auto_sus_scores,
+            "questions": sus_question_averages,
         },
         "qualitative": {
             "top_quotes": top_quotes[:8],
             "top_reflection_themes": [{"phrase": phrase, "count": count} for phrase, count in feedback_counter.most_common(8)],
+            "feedback_rows": feedback_rows[:10],
         },
         "friction": {
             "top_confusion_tags": [{"tag": tag, "count": count} for tag, count in confusion_counter.most_common(10)],
@@ -2298,7 +2338,6 @@ def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_u
     analytics = get_admin_analytics(current_user)
     kpis = analytics.get("kpis", {})
     live_summary = analytics.get("live_summary", {})
-    retention = analytics.get("retention", {})
     sus = analytics.get("sus", {})
     funnel_counts = (analytics.get("funnel", {}) or {}).get("counts", {})
     top_tasks = analytics.get("tasks", [])[:3]
@@ -2309,7 +2348,7 @@ def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_u
         f"Funnel completion: {funnel_counts.get('finished', 0)} of {funnel_counts.get('started', 0)} sessions reached final step.",
         f"Average SUS score is {sus.get('average', 0)} (min {sus.get('min', 0)}, max {sus.get('max', 0)}).",
         f"Real app usage: {kpis.get('users_tested', 0)} active users and {live_summary.get('events_tracked', 0)} tracked events.",
-        f"D1 retention is {retention.get('d1_rate', 0)}% and D7 retention is {retention.get('d7_rate', 0)}%.",
+        f"Collected {sus.get('responses_count', 0)} SUS submissions and {live_summary.get('feedback_responses', 0)} qualitative reflections.",
     ]
     if top_tasks:
         observations.append(
@@ -2454,13 +2493,6 @@ def seed_live_evidence(action: AdminSeedLiveEvidenceAction | None = None, curren
                 "average": round(sum(sus_scores) / len(sus_scores), 2) if sus_scores else 0.0,
                 "max": max(sus_scores) if sus_scores else 0.0,
                 "buckets": sus_buckets,
-            },
-            "retention": {
-                "cohort_size": len(retention_dates),
-                "d1_users": d1_users,
-                "d7_users": d7_users,
-                "d1_rate": round((d1_users / len(retention_dates)) * 100, 2) if retention_dates else 0.0,
-                "d7_rate": round((d7_users / len(retention_dates)) * 100, 2) if retention_dates else 0.0,
             },
             "sample_quotes": sample_quotes,
         },

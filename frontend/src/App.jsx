@@ -37,6 +37,13 @@ const SUS_SUBMITTED_KEY = 'polysafe_sus_submitted';
 const FEEDBACK_SUBMITTED_KEY = 'polysafe_feedback_submitted';
 const APP_OPEN_TRACK_KEY = 'polysafe_app_open_tracked_date';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.REACT_APP_GOOGLE_CLIENT_ID || '';
+const SUS_QUESTIONS = [
+  'I think I would like to use this system frequently.',
+  'I found the system unnecessarily complex.',
+  'I thought the system was easy to use.',
+  'I think that I would need support from a technical person to use this system.',
+  'I found the various functions in this system were well integrated.',
+];
 
 const readCachedMedUse = () => {
   try {
@@ -176,7 +183,7 @@ const App = () => {
   const [adminSeedLoading, setAdminSeedLoading] = useState(false);
   const [adminSeedInfo, setAdminSeedInfo] = useState('');
   const [susModalOpen, setSusModalOpen] = useState(false);
-  const [susResponses, setSusResponses] = useState(Array(10).fill(3));
+  const [susResponses, setSusResponses] = useState(Array(SUS_QUESTIONS.length).fill(3));
   const [susSubmitting, setSusSubmitting] = useState(false);
   const [susInfo, setSusInfo] = useState('');
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
@@ -2536,7 +2543,7 @@ const App = () => {
           )}
           {currentUser && !isAdminUser && !hasSubmittedSus && (
             <div className="mb-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800 flex items-center justify-between gap-3">
-              <span>Help us improve PolySafe: complete the 10-question usability survey (SUS).</span>
+              <span>Help us improve PolySafe: complete the 5-question usability survey (SUS).</span>
               <button
                 type="button"
                 onClick={() => setSusModalOpen(true)}
@@ -2755,24 +2762,32 @@ const App = () => {
               className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-xl p-5"
             >
               <h3 className="text-lg font-semibold text-slate-900">System Usability Scale (SUS)</h3>
-              <p className="text-sm text-slate-600 mt-1">Please rate each item from 1 (strongly disagree) to 5 (strongly agree).</p>
-              <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-2">
-                {susResponses.map((value, idx) => (
-                  <label key={`sus-modal-${idx}`} className="text-xs text-slate-700">
-                    Q{idx + 1}
-                    <input
-                      type="number"
-                      min="1"
-                      max="5"
-                      value={value}
-                      onChange={(e) => {
-                        const next = [...susResponses];
-                        next[idx] = Number(e.target.value || 3);
-                        setSusResponses(next);
-                      }}
-                      className="w-full mt-1 px-2 py-1 rounded border border-slate-300 text-sm"
-                    />
-                  </label>
+              <p className="text-sm text-slate-600 mt-1">Please rate each statement from 1 (strongly disagree) to 5 (strongly agree).</p>
+              <div className="mt-4 space-y-3">
+                {SUS_QUESTIONS.map((question, idx) => (
+                  <div key={`sus-modal-${idx}`} className="rounded-lg border border-slate-200 p-3">
+                    <p className="text-sm text-slate-800 font-medium">Q{idx + 1}. {question}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {[1, 2, 3, 4, 5].map((score) => (
+                        <button
+                          key={`sus-score-${idx}-${score}`}
+                          type="button"
+                          onClick={() => {
+                            const next = [...susResponses];
+                            next[idx] = score;
+                            setSusResponses(next);
+                          }}
+                          className={`px-3 py-1 rounded border text-sm font-semibold ${
+                            susResponses[idx] === score
+                              ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
+                              : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          {score}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
               <div className="mt-5 flex items-center justify-end gap-2">
