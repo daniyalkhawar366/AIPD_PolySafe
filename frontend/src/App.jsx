@@ -708,34 +708,6 @@ const App = () => {
   const hasSubmittedSus = Boolean(currentUser && localStorage.getItem(`${SUS_SUBMITTED_KEY}_${currentAccountEmail}`) === '1');
   const canAddMoreMedicines = currentUser?.is_premium || meds.length < FREE_TIER_MED_LIMIT;
 
-  const createAdminSession = async (payload) => {
-    setAdminSaving(true);
-    setAdminError('');
-    try {
-      await axios.post(`${API_BASE}/admin/test-sessions`, payload, getAuthConfig(token));
-      await fetchAdminEvidence();
-    } catch (err) {
-      const detail = err?.response?.data?.detail || 'Failed to create test session.';
-      setAdminError(detail);
-    } finally {
-      setAdminSaving(false);
-    }
-  };
-
-  const updateAdminSession = async (sessionId, payload) => {
-    setAdminSaving(true);
-    setAdminError('');
-    try {
-      await axios.put(`${API_BASE}/admin/test-sessions/${sessionId}`, payload, getAuthConfig(token));
-      await fetchAdminEvidence();
-    } catch (err) {
-      const detail = err?.response?.data?.detail || 'Failed to update test session.';
-      setAdminError(detail);
-    } finally {
-      setAdminSaving(false);
-    }
-  };
-
   const seedAdminSampleData = async () => {
     setAdminSaving(true);
     setAdminError('');
@@ -2635,8 +2607,6 @@ const App = () => {
               saving={adminSaving}
               error={adminError}
               onRefresh={fetchAdminEvidence}
-              onCreateSession={createAdminSession}
-              onUpdateSession={updateAdminSession}
               onSeedSample={seedAdminSampleData}
             />
           ) : (

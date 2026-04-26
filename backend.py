@@ -2066,39 +2066,6 @@ def submit_sus(action: SusSubmissionAction, current_user: dict[str, Any] = Depen
     return {"success": True, "sus_score": sus_score}
 
 
-@app.post("/api/admin/test-sessions")
-def create_admin_test_session(action: TestSessionAction, current_user: dict[str, Any] = Depends(get_current_user)):
-    _require_users_collection()
-    _require_test_sessions_collection()
-    _require_admin_user(current_user)
-
-    session_doc = _build_test_session_doc(action, current_user)
-    inserted = test_sessions_collection.insert_one(session_doc)
-    created_doc = test_sessions_collection.find_one({"_id": inserted.inserted_id}) or {**session_doc, "_id": inserted.inserted_id}
-    return {"success": True, "session": _public_test_session(created_doc)}
-
-
-@app.put("/api/admin/test-sessions/{session_id}")
-def update_admin_test_session(session_id: str, action: TestSessionAction, current_user: dict[str, Any] = Depends(get_current_user)):
-    _require_users_collection()
-    _require_test_sessions_collection()
-    _require_admin_user(current_user)
-
-    try:
-        oid = ObjectId(session_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid session id")
-
-    existing = test_sessions_collection.find_one({"_id": oid})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Test session not found")
-
-    updated_doc = _build_test_session_doc(action, current_user, existing)
-    test_sessions_collection.update_one({"_id": oid}, {"$set": updated_doc})
-    refreshed = test_sessions_collection.find_one({"_id": oid}) or {**updated_doc, "_id": oid}
-    return {"success": True, "session": _public_test_session(refreshed)}
-
-
 @app.get("/api/admin/test-sessions")
 def get_admin_test_sessions(current_user: dict[str, Any] = Depends(get_current_user)):
     _require_users_collection()
