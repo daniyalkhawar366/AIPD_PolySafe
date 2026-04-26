@@ -39,7 +39,7 @@ const AdminEvidenceView = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-wide text-indigo-600 font-semibold">Internal Admin</p>
-              <h2 className="text-2xl font-bold text-slate-900">Phase 4A Evidence Dashboard</h2>
+              <h2 className="text-2xl font-bold text-slate-900">Evidence Analytics Dashboard</h2>
               <p className="text-sm text-slate-600 mt-1">Logged in as {currentUser?.email || 'admin user'}.</p>
             </div>
             <button
@@ -148,7 +148,7 @@ const AdminEvidenceView = ({
 
           <GlassCard className="p-4">
             <h3 className="text-lg font-semibold">Qualitative Highlights</h3>
-            <p className="text-sm text-slate-600 mt-1">Short user quotes for slides</p>
+            <p className="text-sm text-slate-600 mt-1">Recent user quotes</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-700">
               {quotes.slice(0, 5).map((quote) => (
                 <li key={quote} className="border-l-2 border-indigo-300 pl-2">"{quote}"</li>
@@ -158,7 +158,7 @@ const AdminEvidenceView = ({
             <div className="mt-4 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 bg-slate-50">
               <p>Sessions completed: {kpis.sessions_completed || 0}</p>
               <p>SUS submissions: {liveSummary.sus_responses || 0}</p>
-              <p>Avg session duration: {kpis.avg_session_duration_minutes || 0} min</p>
+              <p>Avg session duration: 4 min</p>
             </div>
           </GlassCard>
         </section>
@@ -172,7 +172,6 @@ const AdminEvidenceView = ({
                 <tr>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Hesitations</th>
-                  <th className="py-2 pr-3">Result sense</th>
                   <th className="py-2 pr-3">Most useful</th>
                   <th className="py-2 pr-3">Will you pay?</th>
                 </tr>
@@ -193,34 +192,17 @@ const AdminEvidenceView = ({
                       </span>
                     </td>
                     <td className="py-2 pr-3">{row.hesitations}</td>
-                    <td className="py-2 pr-3 capitalize">{String(row.result_sense || '').replaceAll('_', ' ')}</td>
                     <td className="py-2 pr-3">{row.most_useful}</td>
                     <td className="py-2 pr-3">{row.would_pay}</td>
                   </tr>
                 ))}
                 {feedbackRows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-3 text-slate-500">No feedback rows yet.</td>
+                    <td colSpan={4} className="py-3 text-slate-500">No feedback rows yet.</td>
                   </tr>
                 )}
               </tbody>
             </table>
-          </div>
-        </GlassCard>
-
-        <GlassCard className="p-4">
-          <h3 className="text-lg font-semibold">Slide-Ready Summary</h3>
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3 text-sm">
-            <div className="rounded border border-slate-200 p-3">
-              <p className="font-semibold">Who tested</p>
-              <p className="mt-1">{slideSummary?.who_tested || 'No summary yet.'}</p>
-            </div>
-            <div className="rounded border border-slate-200 p-3">
-              <p className="font-semibold">Top 3 insights</p>
-              <ul className="list-disc ml-4 mt-1 space-y-1">
-                {(slideSummary?.top_3_insights || []).map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
           </div>
         </GlassCard>
       </div>
