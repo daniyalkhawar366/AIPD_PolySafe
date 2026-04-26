@@ -1,24 +1,19 @@
 import React from 'react';
-import { Database, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 
 const AdminEvidenceView = ({
   GlassCard,
   currentUser,
-  sessions,
   analytics,
   slideSummary,
   loading,
-  saving,
   error,
   onRefresh,
-  onSeedSample,
 }) => {
   const kpis = analytics?.kpis || {};
-  const autoKpis = analytics?.auto_kpis || {};
+  const liveSummary = analytics?.live_summary || {};
   const sus = analytics?.sus || {};
-  const autoSus = analytics?.auto_sus || {};
   const funnel = analytics?.funnel || {};
-  const autoFunnel = analytics?.auto_funnel || {};
   const retention = analytics?.retention || {};
   const tasks = analytics?.tasks || [];
   const confusions = analytics?.friction?.top_confusion_tags || [];
@@ -43,36 +38,20 @@ const AdminEvidenceView = ({
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </button>
-            <button
-              type="button"
-              onClick={onSeedSample}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50"
-              disabled={saving}
-            >
-              <Database className="w-4 h-4" />
-              Seed Sample Data
-            </button>
           </div>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         </GlassCard>
 
         <section className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">Users tested</p><p className="text-2xl font-bold">{kpis.users_tested || 0}</p></GlassCard>
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">Sessions</p><p className="text-2xl font-bold">{kpis.sessions_completed || 0}</p></GlassCard>
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">Avg duration (min)</p><p className="text-2xl font-bold">{kpis.avg_session_duration_minutes || 0}</p></GlassCard>
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">Avg SUS</p><p className="text-2xl font-bold">{kpis.avg_sus || 0}</p></GlassCard>
-        </section>
-
-        <section className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">Live active users</p><p className="text-2xl font-bold">{autoKpis.active_users || 0}</p></GlassCard>
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">Tracked events</p><p className="text-2xl font-bold">{autoKpis.events_tracked || 0}</p></GlassCard>
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">In-app SUS responses</p><p className="text-2xl font-bold">{autoKpis.sus_responses || 0}</p></GlassCard>
-          <GlassCard className="p-4"><p className="text-xs text-slate-500">In-app Avg SUS</p><p className="text-2xl font-bold">{autoKpis.auto_avg_sus || 0}</p></GlassCard>
+          <GlassCard className="p-4 bg-linear-to-br from-indigo-50 to-white"><p className="text-xs text-slate-500">Active users</p><p className="text-2xl font-bold">{kpis.users_tested || 0}</p></GlassCard>
+          <GlassCard className="p-4 bg-linear-to-br from-cyan-50 to-white"><p className="text-xs text-slate-500">Tracked events</p><p className="text-2xl font-bold">{liveSummary.events_tracked || 0}</p></GlassCard>
+          <GlassCard className="p-4 bg-linear-to-br from-emerald-50 to-white"><p className="text-xs text-slate-500">SUS responses</p><p className="text-2xl font-bold">{liveSummary.sus_responses || 0}</p></GlassCard>
+          <GlassCard className="p-4 bg-linear-to-br from-violet-50 to-white"><p className="text-xs text-slate-500">Avg SUS</p><p className="text-2xl font-bold">{kpis.avg_sus || 0}</p></GlassCard>
         </section>
 
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <GlassCard className="p-4">
-            <h3 className="text-lg font-semibold">Funnel</h3>
+            <h3 className="text-lg font-semibold">Live Funnel</h3>
             <div className="mt-3 space-y-2">
               {Object.entries(funnel.counts || {}).map(([step, count]) => (
                 <div key={step}>
@@ -97,29 +76,12 @@ const AdminEvidenceView = ({
               <p>Above 68: {sus.buckets?.above_68 || 0}</p>
               <p>80+: {sus.buckets?.above_80 || 0}</p>
             </div>
-            <p className="text-sm text-slate-600 mt-4">Live SUS: avg {autoSus.average || 0}, min {autoSus.min || 0}, max {autoSus.max || 0}</p>
+            <p className="text-sm text-slate-600 mt-4">Average live session duration: {kpis.avg_session_duration_minutes || 0} minutes</p>
           </GlassCard>
         </section>
 
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <GlassCard className="p-4">
-            <h3 className="text-lg font-semibold">Live App Funnel</h3>
-            <div className="mt-3 space-y-2">
-              {Object.entries(autoFunnel.counts || {}).map(([step, count]) => (
-                <div key={step}>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="capitalize">{step.replace('_', ' ')}</span>
-                    <span>{count} ({autoFunnel.conversion_percent?.[step] || 0}%)</span>
-                  </div>
-                  <div className="h-2 rounded bg-slate-100 mt-1">
-                    <div className="h-2 rounded bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, autoFunnel.conversion_percent?.[step] || 0))}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </GlassCard>
-
-          <GlassCard className="p-4">
+          <GlassCard className="p-4 bg-linear-to-br from-slate-50 to-white">
             <h3 className="text-lg font-semibold">Retention (D1 / D7)</h3>
             <p className="text-sm text-slate-600 mt-1">Cohort size: {retention.cohort_size || 0} users</p>
             <div className="mt-3 space-y-2 text-sm">
@@ -127,6 +89,14 @@ const AdminEvidenceView = ({
               <p>D1 retention rate: {retention.d1_rate || 0}%</p>
               <p>D7 retained users: {retention.d7_users || 0}</p>
               <p>D7 retention rate: {retention.d7_rate || 0}%</p>
+            </div>
+          </GlassCard>
+          <GlassCard className="p-4 bg-linear-to-br from-slate-50 to-white">
+            <h3 className="text-lg font-semibold">Evidence Coverage</h3>
+            <div className="mt-3 space-y-2 text-sm text-slate-700">
+              <p>Behavioral evidence: {liveSummary.events_tracked || 0} live events</p>
+              <p>Usability evidence: {liveSummary.sus_responses || 0} SUS submissions</p>
+              <p>Qualitative evidence: {liveSummary.feedback_responses || 0} user reflections</p>
             </div>
           </GlassCard>
         </section>
@@ -176,12 +146,6 @@ const AdminEvidenceView = ({
           </div>
         </GlassCard>
 
-        <GlassCard className="p-4">
-          <h3 className="text-lg font-semibold">Manual Session Entry Removed</h3>
-          <p className="text-sm text-slate-600 mt-2">
-            This admin panel now focuses on automatically collected live behavioral metrics and in-app SUS responses from real user activity.
-          </p>
-        </GlassCard>
       </div>
     </div>
   );

@@ -34,6 +34,7 @@ const CACHE_PRESCRIPTIONS_KEY = 'polysafe_cache_prescriptions';
 const CACHE_SAFETY_KEY = 'polysafe_cache_safety';
 const CACHE_MED_USE_KEY = 'polysafe_cache_med_use';
 const SUS_SUBMITTED_KEY = 'polysafe_sus_submitted';
+const FEEDBACK_SUBMITTED_KEY = 'polysafe_feedback_submitted';
 const APP_OPEN_TRACK_KEY = 'polysafe_app_open_tracked_date';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.REACT_APP_GOOGLE_CLIENT_ID || '';
 
@@ -168,16 +169,25 @@ const App = () => {
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [ocrConfidence, setOcrConfidence] = useState(0);
   const [savedPrescriptions, setSavedPrescriptions] = useState([]);
-  const [adminSessions, setAdminSessions] = useState([]);
   const [adminAnalytics, setAdminAnalytics] = useState(null);
   const [adminSlideSummary, setAdminSlideSummary] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
-  const [adminSaving, setAdminSaving] = useState(false);
   const [adminError, setAdminError] = useState('');
   const [susModalOpen, setSusModalOpen] = useState(false);
   const [susResponses, setSusResponses] = useState(Array(10).fill(3));
   const [susSubmitting, setSusSubmitting] = useState(false);
   const [susInfo, setSusInfo] = useState('');
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackInfo, setFeedbackInfo] = useState('');
+  const [feedbackForm, setFeedbackForm] = useState({
+    useful: '',
+    confusing: '',
+    would_use_again: '',
+    would_pay: '',
+    top_quote: '',
+    notes: '',
+  });
   const [manualDrugName, setManualDrugName] = useState('');
   const [manualDrugType, setManualDrugType] = useState(MANUAL_SOURCE_DEFAULT);
   const [manualDose, setManualDose] = useState('');
@@ -466,12 +476,10 @@ const App = () => {
     setAdminLoading(true);
     setAdminError('');
     try {
-      const [sessionsRes, analyticsRes, summaryRes] = await Promise.all([
-        axios.get(`${API_BASE}/admin/test-sessions`, getAuthConfig(token)),
+      const [analyticsRes, summaryRes] = await Promise.all([
         axios.get(`${API_BASE}/admin/analytics`, getAuthConfig(token)),
         axios.get(`${API_BASE}/admin/slide-summary`, getAuthConfig(token)),
       ]);
-      setAdminSessions(Array.isArray(sessionsRes.data?.sessions) ? sessionsRes.data.sessions : []);
       setAdminAnalytics(analyticsRes.data || null);
       setAdminSlideSummary(summaryRes.data?.slides || null);
     } catch (err) {
@@ -496,6 +504,7 @@ const App = () => {
   };
 
   const getSusStorageKey = () => `${SUS_SUBMITTED_KEY}_${String(currentUser?.email || '').toLowerCase()}`;
+  const getFeedbackStorageKey = () => `${FEEDBACK_SUBMITTED_KEY}_${String(currentUser?.email || '').toLowerCase()}`;
 
   const submitSusSurvey = async () => {
     setSusSubmitting(true);
@@ -513,6 +522,22 @@ const App = () => {
       setSusInfo(err?.response?.data?.detail || 'Could not submit SUS right now.');
     } finally {
       setSusSubmitting(false);
+    }
+  };
+
+  const submitFeedback = async () => {
+    setFeedbackSubmitting(true);
+    setFeedbackInfo('');
+    try {
+      await axios.post(`${API_BASE}/me/feedback`, feedbackForm, getAuthConfig(token));
+      localStorage.setItem(getFeedbackStorageKey(), '1');
+      setFeedbackInfo('Thanks. Your feedback has been saved.');
+      setFeedbackModalOpen(false);
+      await trackUsageEvent('feedback_submitted', { source: 'in_app_prompt' });
+    } catch (err) {
+      setFeedbackInfo(err?.response?.data?.detail || 'Could not submit feedback right now.');
+    } finally {
+      setFeedbackSubmitting(false);
     }
   };
 
@@ -706,21 +731,8 @@ const App = () => {
   const currentAccountEmail = String(currentUser?.email || '').trim().toLowerCase();
   const isAdminUser = Boolean(currentAccountEmail && ADMIN_EMAILS.has(currentAccountEmail));
   const hasSubmittedSus = Boolean(currentUser && localStorage.getItem(`${SUS_SUBMITTED_KEY}_${currentAccountEmail}`) === '1');
+  const hasSubmittedFeedback = Boolean(currentUser && localStorage.getItem(`${FEEDBACK_SUBMITTED_KEY}_${currentAccountEmail}`) === '1');
   const canAddMoreMedicines = currentUser?.is_premium || meds.length < FREE_TIER_MED_LIMIT;
-
-  const seedAdminSampleData = async () => {
-    setAdminSaving(true);
-    setAdminError('');
-    try {
-      await axios.post(`${API_BASE}/admin/seed-sample`, {}, getAuthConfig(token));
-      await fetchAdminEvidence();
-    } catch (err) {
-      const detail = err?.response?.data?.detail || 'Failed to seed sample sessions.';
-      setAdminError(detail);
-    } finally {
-      setAdminSaving(false);
-    }
-  };
 
   const addNewProfile = async (patientName, patientEmail) => {
     if (!currentUser) return;
@@ -2513,6 +2525,23 @@ const App = () => {
               {susInfo}
             </div>
           )}
+          {feedbackInfo && (
+            <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              {feedbackInfo}
+            </div>
+          )}
+          {currentUser && !isAdminUser && hasSubmittedSus && !hasSubmittedFeedback && (
+            <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 flex items-center justify-between gap-3">
+              <span>One more step: share what worked/confused you so we can improve PolySafe.</span>
+              <button
+                type="button"
+                onClick={() => setFeedbackModalOpen(true)}
+                className="px-2 py-1 rounded border border-sky-300 text-sky-700 font-semibold hover:bg-sky-100"
+              >
+                Give Feedback
+              </button>
+            </div>
+          )}
           {profileSwitching ? (
             <div className="h-full w-full max-w-5xl mx-auto space-y-4 animate-pulse">
               <div className="h-24 rounded-2xl bg-slate-200" />
@@ -2600,14 +2629,11 @@ const App = () => {
             <AdminEvidenceView
               GlassCard={GlassCard}
               currentUser={currentUser}
-              sessions={adminSessions}
               analytics={adminAnalytics}
               slideSummary={adminSlideSummary}
               loading={adminLoading}
-              saving={adminSaving}
               error={adminError}
               onRefresh={fetchAdminEvidence}
-              onSeedSample={seedAdminSampleData}
             />
           ) : (
             <div className="h-full overflow-y-auto pr-1">
@@ -2736,6 +2762,54 @@ const App = () => {
                   className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50"
                 >
                   {susSubmitting ? 'Submitting...' : 'Submit SUS'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {feedbackModalOpen && (
+          <div className="fixed inset-0 z-1210 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !feedbackSubmitting && setFeedbackModalOpen(false)}
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-xl p-5"
+            >
+              <h3 className="text-lg font-semibold text-slate-900">Quick User Reflection</h3>
+              <p className="text-sm text-slate-600 mt-1">These answers help us collect evidence for product improvement.</p>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
+                <textarea value={feedbackForm.useful} onChange={(e) => setFeedbackForm((p) => ({ ...p, useful: e.target.value }))} placeholder="What did you find useful?" className="px-3 py-2 rounded border border-slate-300 text-sm min-h-20" />
+                <textarea value={feedbackForm.confusing} onChange={(e) => setFeedbackForm((p) => ({ ...p, confusing: e.target.value }))} placeholder="What was confusing?" className="px-3 py-2 rounded border border-slate-300 text-sm min-h-20" />
+                <textarea value={feedbackForm.would_use_again} onChange={(e) => setFeedbackForm((p) => ({ ...p, would_use_again: e.target.value }))} placeholder="Would you use this again? Why?" className="px-3 py-2 rounded border border-slate-300 text-sm min-h-20" />
+                <textarea value={feedbackForm.would_pay} onChange={(e) => setFeedbackForm((p) => ({ ...p, would_pay: e.target.value }))} placeholder="Would you pay? Why/why not?" className="px-3 py-2 rounded border border-slate-300 text-sm min-h-20" />
+              </div>
+              <textarea value={feedbackForm.top_quote} onChange={(e) => setFeedbackForm((p) => ({ ...p, top_quote: e.target.value }))} placeholder="One quote that summarizes your experience" className="w-full mt-2 px-3 py-2 rounded border border-slate-300 text-sm min-h-16" />
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFeedbackModalOpen(false)}
+                  disabled={feedbackSubmitting}
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitFeedback}
+                  disabled={feedbackSubmitting}
+                  className="px-4 py-2 rounded-lg bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-50"
+                >
+                  {feedbackSubmitting ? 'Submitting...' : 'Submit Feedback'}
                 </button>
               </div>
             </motion.div>
