@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Activity, ChevronRight, Crown, LogOut, Menu, Shield, Upload, User, Users } from 'lucide-react';
+import { Activity, BarChart3, ChevronRight, Crown, LogOut, Menu, Shield, Upload, User, Users } from 'lucide-react';
 
 const NavItem = ({
   icon: Icon,
@@ -37,6 +37,7 @@ const AppSidebar = ({
   medsLength,
   profileRequired,
   profileNudgeVisible,
+  showAdmin = false,
 }) => {
   const displayName = currentUser?.profile?.patient_name || currentUser?.name || 'User';
   const initials = displayName
@@ -141,6 +142,16 @@ const AppSidebar = ({
             onClick={() => onNavigate('upgrade')}
             showChevron={activeView === 'upgrade'}
           />
+          {showAdmin && (
+            <NavItem
+              icon={BarChart3}
+              label="Admin Evidence"
+              active={activeView === 'admin'}
+              sidebarOpen={sidebarOpen}
+              onClick={() => onNavigate('admin')}
+              showChevron={activeView === 'admin'}
+            />
+          )}
         </nav>
 
         <button

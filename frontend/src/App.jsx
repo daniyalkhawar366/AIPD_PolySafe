@@ -15,6 +15,7 @@ import DashboardView from './views/DashboardView';
 import HistoryView from './views/HistoryView';
 import ProfileView from './views/ProfileView';
 import UpgradeView from './views/UpgradeView';
+import AdminEvidenceView from './views/admin/AdminEvidenceView';
 
 const appLogo = '/favicon.svg';
 
@@ -45,6 +46,12 @@ const readCachedMedUse = () => {
   }
 };
 
+const ADMIN_EMAILS = new Set(
+  (import.meta.env.VITE_ADMIN_EMAILS || 'haiderzia8@gmail.com,daniyalkhawar3@gmail.com')
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
+);
 axios.defaults.headers.common['ngrok-skip-browser-warning'] = '69420';
 axios.defaults.withCredentials = true;
 let authInterceptorInstalled = false;
@@ -102,6 +109,7 @@ const VIEW_TO_PATH = {
   history: '/history',
   profile: '/profile',
   upgrade: '/upgrade',
+  admin: '/admin',
 };
 
 const PATH_TO_VIEW = {
@@ -110,6 +118,7 @@ const PATH_TO_VIEW = {
   '/history': 'history',
   '/profile': 'profile',
   '/upgrade': 'upgrade',
+  '/admin': 'admin',
   '/': 'dashboard',
 };
 
@@ -157,6 +166,12 @@ const App = () => {
   const [uploadedFileName, setUploadedFileName] = useState('');
   const [ocrConfidence, setOcrConfidence] = useState(0);
   const [savedPrescriptions, setSavedPrescriptions] = useState([]);
+  const [adminSessions, setAdminSessions] = useState([]);
+  const [adminAnalytics, setAdminAnalytics] = useState(null);
+  const [adminSlideSummary, setAdminSlideSummary] = useState(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminSaving, setAdminSaving] = useState(false);
+  const [adminError, setAdminError] = useState('');
   const [manualDrugName, setManualDrugName] = useState('');
   const [manualDrugType, setManualDrugType] = useState(MANUAL_SOURCE_DEFAULT);
   const [manualDose, setManualDose] = useState('');
@@ -440,6 +455,27 @@ const App = () => {
     }
   };
 
+  const fetchAdminEvidence = async () => {
+    if (!currentUser) return;
+    setAdminLoading(true);
+    setAdminError('');
+    try {
+      const [sessionsRes, analyticsRes, summaryRes] = await Promise.all([
+        axios.get(`${API_BASE}/admin/test-sessions`, getAuthConfig(token)),
+        axios.get(`${API_BASE}/admin/analytics`, getAuthConfig(token)),
+        axios.get(`${API_BASE}/admin/slide-summary`, getAuthConfig(token)),
+      ]);
+      setAdminSessions(Array.isArray(sessionsRes.data?.sessions) ? sessionsRes.data.sessions : []);
+      setAdminAnalytics(analyticsRes.data || null);
+      setAdminSlideSummary(summaryRes.data?.slides || null);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Could not load admin evidence data.';
+      setAdminError(detail);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
   const filteredMeds = meds.filter((med) => med.name.toLowerCase().includes(medSearch.trim().toLowerCase()));
   const profileRequired = Boolean(currentUser) && !Boolean(currentUser.profile_completed);
   const navigateToView = (view, options = {}) => {
@@ -627,7 +663,50 @@ const App = () => {
   const accountProfiles = Array.isArray(currentUser?.profiles) ? currentUser.profiles : [];
   const activeProfileId = currentUser?.active_profile_id || accountProfiles[0]?.id || 'default';
   const currentAccountEmail = String(currentUser?.email || '').trim().toLowerCase();
+  const isAdminUser = Boolean(currentAccountEmail && ADMIN_EMAILS.has(currentAccountEmail));
   const canAddMoreMedicines = currentUser?.is_premium || meds.length < FREE_TIER_MED_LIMIT;
+
+  const createAdminSession = async (payload) => {
+    setAdminSaving(true);
+    setAdminError('');
+    try {
+      await axios.post(`${API_BASE}/admin/test-sessions`, payload, getAuthConfig(token));
+      await fetchAdminEvidence();
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Failed to create test session.';
+      setAdminError(detail);
+    } finally {
+      setAdminSaving(false);
+    }
+  };
+
+  const updateAdminSession = async (sessionId, payload) => {
+    setAdminSaving(true);
+    setAdminError('');
+    try {
+      await axios.put(`${API_BASE}/admin/test-sessions/${sessionId}`, payload, getAuthConfig(token));
+      await fetchAdminEvidence();
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Failed to update test session.';
+      setAdminError(detail);
+    } finally {
+      setAdminSaving(false);
+    }
+  };
+
+  const seedAdminSampleData = async () => {
+    setAdminSaving(true);
+    setAdminError('');
+    try {
+      await axios.post(`${API_BASE}/admin/seed-sample`, {}, getAuthConfig(token));
+      await fetchAdminEvidence();
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Failed to seed sample sessions.';
+      setAdminError(detail);
+    } finally {
+      setAdminSaving(false);
+    }
+  };
 
   const addNewProfile = async (patientName, patientEmail) => {
     if (!currentUser) return;
@@ -788,6 +867,19 @@ const App = () => {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (!isAdminUser && activeView === 'admin') {
+      navigateToView('dashboard', { replace: true });
+    }
+  }, [activeView, currentUser, isAdminUser]);
+
+  useEffect(() => {
+    if (!currentUser || !isAdminUser) return;
+    if (activeView !== 'admin') return;
+    fetchAdminEvidence();
+  }, [activeView, currentUser, isAdminUser]);
 
   useEffect(() => {
     const initialView = getViewFromPath(window.location.pathname);
@@ -2359,6 +2451,7 @@ const App = () => {
         medsLength={meds.length}
         profileRequired={profileRequired}
         profileNudgeVisible={profileNudgeVisible}
+        showAdmin={isAdminUser}
       />
 
       {/* Main Content */}
@@ -2451,6 +2544,21 @@ const App = () => {
               premiumPriceUsd={PREMIUM_PRICE_USD}
               onBack={() => navigateToView('dashboard')}
               currentUser={currentUser}
+            />
+          ) : activeView === 'admin' ? (
+            <AdminEvidenceView
+              GlassCard={GlassCard}
+              currentUser={currentUser}
+              sessions={adminSessions}
+              analytics={adminAnalytics}
+              slideSummary={adminSlideSummary}
+              loading={adminLoading}
+              saving={adminSaving}
+              error={adminError}
+              onRefresh={fetchAdminEvidence}
+              onCreateSession={createAdminSession}
+              onUpdateSession={updateAdminSession}
+              onSeedSample={seedAdminSampleData}
             />
           ) : (
             <div className="h-full overflow-y-auto pr-1">

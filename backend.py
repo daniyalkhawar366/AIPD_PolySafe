@@ -12,6 +12,7 @@ import uuid
 import random
 import secrets
 import smtplib
+from collections import Counter
 from typing import Any
 from zoneinfo import ZoneInfo
 import stripe
@@ -80,6 +81,7 @@ medications_collection = None
 prescriptions_collection = None
 share_links_collection = None
 reminders_collection = None
+test_sessions_collection = None
 if MONGO_URI:
     try:
         mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=4000)
@@ -89,6 +91,7 @@ if MONGO_URI:
         prescriptions_collection = mongo_db["prescriptions"]
         share_links_collection = mongo_db["share_links"]
         reminders_collection = mongo_db["reminders"]
+        test_sessions_collection = mongo_db["test_sessions"]
         users_collection.create_index("email", unique=True)
         medications_collection.create_index([("user_id", 1), ("rxcui", 1)])
         medications_collection.create_index([("user_id", 1), ("drug_name", 1)])
@@ -98,12 +101,15 @@ if MONGO_URI:
         share_links_collection.create_index([("expires_at", 1)])
         reminders_collection.create_index([("user_id", 1), ("profile_id", 1)], unique=True)
         reminders_collection.create_index([("enabled", 1), ("next_send_at", 1)])
+        test_sessions_collection.create_index([("created_by", 1), ("session_date", -1)])
+        test_sessions_collection.create_index([("tester_label", 1), ("session_date", -1)])
     except PyMongoError:
         users_collection = None
         medications_collection = None
         prescriptions_collection = None
         share_links_collection = None
         reminders_collection = None
+        test_sessions_collection = None
 
 # Enable CORS for React
 app.add_middleware(
@@ -224,6 +230,43 @@ class DeleteAccountAction(BaseModel):
     confirm_email: EmailStr
 
 
+class TestTaskAction(BaseModel):
+    task_id: str = Field(min_length=1, max_length=80)
+    completed: bool = False
+    time_seconds: int = Field(default=0, ge=0, le=7200)
+    hesitations_count: int = Field(default=0, ge=0, le=200)
+    confusion_tags: list[str] = Field(default_factory=list, max_length=20)
+
+
+class TestFunnelAction(BaseModel):
+    started: bool = False
+    uploaded_prescription: bool = False
+    added_med: bool = False
+    opened_safety: bool = False
+    finished: bool = False
+
+
+class TestReflectionAction(BaseModel):
+    useful: str = Field(default="", max_length=1000)
+    confusing: str = Field(default="", max_length=1000)
+    would_use_again: str = Field(default="", max_length=1000)
+    would_pay: str = Field(default="", max_length=1000)
+    notes: str = Field(default="", max_length=2000)
+    top_quote: str = Field(default="", max_length=500)
+
+
+class TestSessionAction(BaseModel):
+    tester_label: str = Field(min_length=1, max_length=120)
+    segment: str = Field(default="", max_length=120)
+    session_date: str = Field(default="")
+    duration_minutes: int = Field(default=0, ge=0, le=600)
+    consent: bool = False
+    tasks: list[TestTaskAction] = Field(default_factory=list, max_length=30)
+    funnel: TestFunnelAction = Field(default_factory=TestFunnelAction)
+    sus_responses: list[int] = Field(default_factory=list, min_length=10, max_length=10)
+    reflection: TestReflectionAction = Field(default_factory=TestReflectionAction)
+
+
 ALLOWED_ROLES = {"patient", "caregiver"}
 ALLOWED_UPLOAD_MIME_TYPES = {
     "image/png",
@@ -235,6 +278,15 @@ MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_PROFILE_ID = "default"
 PREMIUM_EMAIL_WHITELIST = {
     "daniyalkhawar3@gmail.com",
+}
+ADMIN_EMAIL_WHITELIST = {
+    email.strip().lower()
+    for email in (
+        os.getenv("ADMIN_EMAILS", "").split(",")
+        + ["haiderzia8@gmail.com"]
+        + list(PREMIUM_EMAIL_WHITELIST)
+    )
+    if email.strip()
 }
 
 GENERIC_DUPLICATE_ALIASES = {
@@ -560,6 +612,230 @@ def _require_reminders_collection():
             detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
         )
 
+
+def _require_test_sessions_collection():
+    if test_sessions_collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is not configured. Set MONGO_URI and restart the backend.",
+        )
+
+
+def _require_admin_user(user_doc: dict[str, Any]):
+    email = str((user_doc or {}).get("email") or "").strip().lower()
+    if email not in ADMIN_EMAIL_WHITELIST:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+def _normalize_confusion_tags(tags: list[str] | None) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for tag in tags or []:
+        normalized = str(tag or "").strip().lower()[:60]
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(normalized)
+    return cleaned[:20]
+
+
+def _calculate_sus_score(responses: list[int]) -> float:
+    if len(responses) != 10:
+        raise HTTPException(status_code=400, detail="SUS responses must contain exactly 10 answers")
+
+    total = 0
+    for idx, value in enumerate(responses):
+        answer = int(value)
+        if answer < 1 or answer > 5:
+            raise HTTPException(status_code=400, detail="Each SUS response must be between 1 and 5")
+        if idx % 2 == 0:
+            total += answer - 1
+        else:
+            total += 5 - answer
+    return round(total * 2.5, 2)
+
+
+def _public_test_session(doc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(doc.get("_id", "")),
+        "tester_label": str(doc.get("tester_label", "")),
+        "segment": str(doc.get("segment", "")),
+        "session_date": str(doc.get("session_date", "")),
+        "duration_minutes": int(doc.get("duration_minutes", 0) or 0),
+        "consent": bool(doc.get("consent", False)),
+        "tasks": doc.get("tasks", []),
+        "funnel": doc.get("funnel", {}),
+        "sus_responses": [int(value) for value in (doc.get("sus_responses") or [])][:10],
+        "sus_score": float(doc.get("sus_score", 0.0) or 0.0),
+        "reflection": doc.get("reflection", {}),
+        "created_by": str(doc.get("created_by", "")),
+        "created_at": doc.get("created_at").isoformat() if isinstance(doc.get("created_at"), datetime) else doc.get("created_at"),
+        "updated_at": doc.get("updated_at").isoformat() if isinstance(doc.get("updated_at"), datetime) else doc.get("updated_at"),
+    }
+
+
+def _build_test_session_doc(action: TestSessionAction, current_user: dict[str, Any], existing_doc: dict[str, Any] | None = None) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    tasks: list[dict[str, Any]] = []
+    for task in action.tasks:
+        tasks.append(
+            {
+                "task_id": str(task.task_id).strip()[:80],
+                "completed": bool(task.completed),
+                "time_seconds": int(task.time_seconds),
+                "hesitations_count": int(task.hesitations_count),
+                "confusion_tags": _normalize_confusion_tags(task.confusion_tags),
+            }
+        )
+
+    sus_responses = [int(item) for item in action.sus_responses]
+    sus_score = _calculate_sus_score(sus_responses)
+    base_created_by = str((existing_doc or {}).get("created_by") or str(current_user.get("_id", "")))
+    base_created_at = (existing_doc or {}).get("created_at") or now
+
+    return {
+        "tester_label": str(action.tester_label).strip()[:120],
+        "segment": str(action.segment or "").strip()[:120],
+        "session_date": str(action.session_date or "").strip(),
+        "duration_minutes": int(action.duration_minutes),
+        "consent": bool(action.consent),
+        "tasks": tasks,
+        "funnel": {
+            "started": bool(action.funnel.started),
+            "uploaded_prescription": bool(action.funnel.uploaded_prescription),
+            "added_med": bool(action.funnel.added_med),
+            "opened_safety": bool(action.funnel.opened_safety),
+            "finished": bool(action.funnel.finished),
+        },
+        "sus_responses": sus_responses,
+        "sus_score": sus_score,
+        "reflection": {
+            "useful": str(action.reflection.useful or "").strip()[:1000],
+            "confusing": str(action.reflection.confusing or "").strip()[:1000],
+            "would_use_again": str(action.reflection.would_use_again or "").strip()[:1000],
+            "would_pay": str(action.reflection.would_pay or "").strip()[:1000],
+            "notes": str(action.reflection.notes or "").strip()[:2000],
+            "top_quote": str(action.reflection.top_quote or "").strip()[:500],
+        },
+        "created_by": base_created_by,
+        "created_at": base_created_at,
+        "updated_at": now,
+    }
+
+
+def _sample_test_sessions_payloads() -> list[dict[str, Any]]:
+    return [
+        {
+            "tester_label": "User-01",
+            "segment": "Adult with 2+ medicines",
+            "session_date": "2026-04-20",
+            "duration_minutes": 18,
+            "consent": True,
+            "tasks": [
+                {"task_id": "upload_prescription", "completed": True, "time_seconds": 190, "hesitations_count": 1, "confusion_tags": ["file_format"]},
+                {"task_id": "add_medication", "completed": True, "time_seconds": 130, "hesitations_count": 1, "confusion_tags": []},
+                {"task_id": "open_safety_report", "completed": True, "time_seconds": 70, "hesitations_count": 0, "confusion_tags": []},
+            ],
+            "funnel": {"started": True, "uploaded_prescription": True, "added_med": True, "opened_safety": True, "finished": True},
+            "sus_responses": [4, 2, 4, 2, 5, 2, 4, 2, 4, 2],
+            "reflection": {
+                "useful": "Safety report helped prioritize risky combinations.",
+                "confusing": "Upload button label could be clearer.",
+                "would_use_again": "Yes for medication checks.",
+                "would_pay": "Maybe if reminders improve.",
+                "notes": "Strong first impression.",
+                "top_quote": "I finally understood which medicine pair is risky.",
+            },
+        },
+        {
+            "tester_label": "User-02",
+            "segment": "Caregiver for parent",
+            "session_date": "2026-04-21",
+            "duration_minutes": 22,
+            "consent": True,
+            "tasks": [
+                {"task_id": "upload_prescription", "completed": True, "time_seconds": 260, "hesitations_count": 2, "confusion_tags": ["camera_angle", "file_format"]},
+                {"task_id": "add_medication", "completed": False, "time_seconds": 220, "hesitations_count": 3, "confusion_tags": ["dose_frequency_fields"]},
+                {"task_id": "open_safety_report", "completed": False, "time_seconds": 0, "hesitations_count": 0, "confusion_tags": []},
+            ],
+            "funnel": {"started": True, "uploaded_prescription": True, "added_med": False, "opened_safety": False, "finished": False},
+            "sus_responses": [3, 3, 3, 3, 2, 4, 3, 3, 3, 3],
+            "reflection": {
+                "useful": "Medication list concept is valuable.",
+                "confusing": "Dose and frequency input felt unclear.",
+                "would_use_again": "Yes after quick walkthrough.",
+                "would_pay": "No in current form.",
+                "notes": "Needed help at step 2.",
+                "top_quote": "I was not sure where to put dosage details.",
+            },
+        },
+        {
+            "tester_label": "User-03",
+            "segment": "Student managing own meds",
+            "session_date": "2026-04-22",
+            "duration_minutes": 14,
+            "consent": True,
+            "tasks": [
+                {"task_id": "upload_prescription", "completed": False, "time_seconds": 0, "hesitations_count": 1, "confusion_tags": ["skipped_upload"]},
+                {"task_id": "add_medication", "completed": True, "time_seconds": 90, "hesitations_count": 1, "confusion_tags": ["dose_frequency_fields"]},
+                {"task_id": "open_safety_report", "completed": True, "time_seconds": 55, "hesitations_count": 0, "confusion_tags": []},
+            ],
+            "funnel": {"started": True, "uploaded_prescription": False, "added_med": True, "opened_safety": True, "finished": True},
+            "sus_responses": [5, 2, 4, 2, 4, 2, 5, 1, 4, 2],
+            "reflection": {
+                "useful": "Manual add was fast.",
+                "confusing": "Unsure if upload is required.",
+                "would_use_again": "Yes, weekly.",
+                "would_pay": "Not yet.",
+                "notes": "Great for quick check.",
+                "top_quote": "Manual entry made this super easy.",
+            },
+        },
+        {
+            "tester_label": "User-04",
+            "segment": "Older adult, low digital literacy",
+            "session_date": "2026-04-23",
+            "duration_minutes": 28,
+            "consent": True,
+            "tasks": [
+                {"task_id": "upload_prescription", "completed": True, "time_seconds": 330, "hesitations_count": 4, "confusion_tags": ["file_format", "camera_angle"]},
+                {"task_id": "add_medication", "completed": True, "time_seconds": 210, "hesitations_count": 3, "confusion_tags": ["dose_frequency_fields"]},
+                {"task_id": "open_safety_report", "completed": True, "time_seconds": 120, "hesitations_count": 2, "confusion_tags": ["severity_meaning"]},
+            ],
+            "funnel": {"started": True, "uploaded_prescription": True, "added_med": True, "opened_safety": True, "finished": True},
+            "sus_responses": [2, 4, 2, 4, 2, 4, 2, 4, 3, 4],
+            "reflection": {
+                "useful": "Warnings are useful when explained.",
+                "confusing": "Medical terms in severity labels.",
+                "would_use_again": "With caregiver help.",
+                "would_pay": "No.",
+                "notes": "Accessibility improvements needed.",
+                "top_quote": "I need simpler words for the risk levels.",
+            },
+        },
+        {
+            "tester_label": "User-05",
+            "segment": "Caregiver with prior app experience",
+            "session_date": "2026-04-24",
+            "duration_minutes": 16,
+            "consent": True,
+            "tasks": [
+                {"task_id": "upload_prescription", "completed": True, "time_seconds": 150, "hesitations_count": 1, "confusion_tags": []},
+                {"task_id": "add_medication", "completed": True, "time_seconds": 95, "hesitations_count": 1, "confusion_tags": []},
+                {"task_id": "open_safety_report", "completed": True, "time_seconds": 60, "hesitations_count": 0, "confusion_tags": []},
+            ],
+            "funnel": {"started": True, "uploaded_prescription": True, "added_med": True, "opened_safety": True, "finished": True},
+            "sus_responses": [4, 1, 4, 1, 5, 1, 4, 1, 4, 1],
+            "reflection": {
+                "useful": "Clear structure and fast task flow.",
+                "confusing": "None major.",
+                "would_use_again": "Definitely.",
+                "would_pay": "Yes if family profile sync improves.",
+                "notes": "Most successful session.",
+                "top_quote": "This feels close to something I'd actually use.",
+            },
+        },
+    ]
 
 def _public_user_doc(user_doc: dict[str, Any]) -> dict[str, Any]:
     profiles, active_profile, active_profile_id, _ = _normalize_profiles_state(user_doc)
@@ -1703,6 +1979,255 @@ def update_my_reminders(action: ReminderSettingsAction, current_user: dict[str, 
     return {
         "success": True,
         "reminder": _public_reminder_doc(refreshed_doc, current_user),
+    }
+
+
+@app.post("/api/admin/test-sessions")
+def create_admin_test_session(action: TestSessionAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_test_sessions_collection()
+    _require_admin_user(current_user)
+
+    session_doc = _build_test_session_doc(action, current_user)
+    inserted = test_sessions_collection.insert_one(session_doc)
+    created_doc = test_sessions_collection.find_one({"_id": inserted.inserted_id}) or {**session_doc, "_id": inserted.inserted_id}
+    return {"success": True, "session": _public_test_session(created_doc)}
+
+
+@app.put("/api/admin/test-sessions/{session_id}")
+def update_admin_test_session(session_id: str, action: TestSessionAction, current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_test_sessions_collection()
+    _require_admin_user(current_user)
+
+    try:
+        oid = ObjectId(session_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid session id")
+
+    existing = test_sessions_collection.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Test session not found")
+
+    updated_doc = _build_test_session_doc(action, current_user, existing)
+    test_sessions_collection.update_one({"_id": oid}, {"$set": updated_doc})
+    refreshed = test_sessions_collection.find_one({"_id": oid}) or {**updated_doc, "_id": oid}
+    return {"success": True, "session": _public_test_session(refreshed)}
+
+
+@app.get("/api/admin/test-sessions")
+def get_admin_test_sessions(current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_test_sessions_collection()
+    _require_admin_user(current_user)
+
+    docs = list(test_sessions_collection.find({}).sort("session_date", -1))
+    return {"success": True, "sessions": [_public_test_session(doc) for doc in docs]}
+
+
+@app.get("/api/admin/analytics")
+def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_test_sessions_collection()
+    _require_admin_user(current_user)
+
+    sessions = list(test_sessions_collection.find({}))
+    total_sessions = len(sessions)
+    unique_testers = len({str(doc.get("tester_label", "")).strip().lower() for doc in sessions if str(doc.get("tester_label", "")).strip()})
+    avg_duration = round(
+        sum(int(doc.get("duration_minutes", 0) or 0) for doc in sessions) / total_sessions,
+        2,
+    ) if total_sessions else 0.0
+
+    sus_scores = [float(doc.get("sus_score", 0.0) or 0.0) for doc in sessions]
+    sus_average = round(sum(sus_scores) / len(sus_scores), 2) if sus_scores else 0.0
+    sus_min = min(sus_scores) if sus_scores else 0.0
+    sus_max = max(sus_scores) if sus_scores else 0.0
+    sus_buckets = {
+        "below_50": sum(1 for score in sus_scores if score < 50),
+        "50_to_68": sum(1 for score in sus_scores if 50 <= score <= 68),
+        "above_68": sum(1 for score in sus_scores if score > 68),
+        "above_80": sum(1 for score in sus_scores if score >= 80),
+    }
+
+    funnel_steps = ["started", "uploaded_prescription", "added_med", "opened_safety", "finished"]
+    funnel_counts = {step: 0 for step in funnel_steps}
+    for doc in sessions:
+        funnel_doc = doc.get("funnel") or {}
+        for step in funnel_steps:
+            if bool(funnel_doc.get(step)):
+                funnel_counts[step] += 1
+
+    started_count = funnel_counts["started"] or 0
+    funnel_conversion = {
+        step: round((funnel_counts[step] / started_count) * 100, 2) if started_count else 0.0
+        for step in funnel_steps
+    }
+
+    task_stats: dict[str, dict[str, Any]] = {}
+    confusion_counter: Counter[str] = Counter()
+    reflection_counter: Counter[str] = Counter()
+    top_quotes: list[str] = []
+    for doc in sessions:
+        reflection = doc.get("reflection") or {}
+        for key in ["useful", "confusing", "would_use_again", "would_pay", "notes"]:
+            text = str(reflection.get(key, "")).strip().lower()
+            for phrase in re.findall(r"[a-z][a-z\s]{2,30}", text):
+                phrase = phrase.strip()
+                if len(phrase) >= 4:
+                    reflection_counter[phrase] += 1
+        quote = str(reflection.get("top_quote", "")).strip()
+        if quote:
+            top_quotes.append(quote)
+
+        for task in doc.get("tasks") or []:
+            task_id = str(task.get("task_id", "")).strip() or "unknown_task"
+            stat = task_stats.setdefault(task_id, {"task_id": task_id, "attempted": 0, "completed": 0, "total_time_seconds": 0, "hesitations": 0, "confusions": 0})
+            stat["attempted"] += 1
+            if bool(task.get("completed")):
+                stat["completed"] += 1
+            stat["total_time_seconds"] += int(task.get("time_seconds", 0) or 0)
+            stat["hesitations"] += int(task.get("hesitations_count", 0) or 0)
+            tags = _normalize_confusion_tags(task.get("confusion_tags") or [])
+            stat["confusions"] += len(tags)
+            for tag in tags:
+                confusion_counter[tag] += 1
+
+    task_performance = []
+    for task_id, stat in task_stats.items():
+        attempted = stat["attempted"] or 1
+        task_performance.append(
+            {
+                "task_id": task_id,
+                "attempted": stat["attempted"],
+                "completed": stat["completed"],
+                "completion_rate": round((stat["completed"] / attempted) * 100, 2),
+                "avg_time_seconds": round(stat["total_time_seconds"] / attempted, 2),
+                "hesitations": stat["hesitations"],
+                "confusions": stat["confusions"],
+                "friction_index": round(((stat["hesitations"] * 1.0) + (stat["confusions"] * 1.5)) / attempted, 2),
+            }
+        )
+    task_performance.sort(key=lambda item: item["friction_index"], reverse=True)
+
+    top_confusions = [{"tag": tag, "count": count} for tag, count in confusion_counter.most_common(10)]
+    top_reflection_themes = [{"phrase": phrase, "count": count} for phrase, count in reflection_counter.most_common(8)]
+
+    return {
+        "success": True,
+        "kpis": {
+            "users_tested": unique_testers,
+            "sessions_completed": total_sessions,
+            "avg_session_duration_minutes": avg_duration,
+            "avg_sus": sus_average,
+        },
+        "funnel": {
+            "counts": funnel_counts,
+            "conversion_percent": funnel_conversion,
+        },
+        "tasks": task_performance,
+        "friction": {
+            "top_confusion_tags": top_confusions,
+        },
+        "sus": {
+            "average": sus_average,
+            "min": sus_min,
+            "max": sus_max,
+            "buckets": sus_buckets,
+            "scores": sus_scores,
+        },
+        "qualitative": {
+            "top_quotes": top_quotes[:8],
+            "top_reflection_themes": top_reflection_themes,
+        },
+    }
+
+
+@app.get("/api/admin/slide-summary")
+def get_admin_slide_summary(current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_test_sessions_collection()
+    _require_admin_user(current_user)
+
+    analytics = get_admin_analytics(current_user)
+    kpis = analytics.get("kpis", {})
+    sus = analytics.get("sus", {})
+    funnel_counts = (analytics.get("funnel", {}) or {}).get("counts", {})
+    top_tasks = analytics.get("tasks", [])[:3]
+    top_confusions = (analytics.get("friction", {}) or {}).get("top_confusion_tags", [])[:3]
+    top_themes = (analytics.get("qualitative", {}) or {}).get("top_reflection_themes", [])[:3]
+
+    observations = [
+        f"Funnel completion: {funnel_counts.get('finished', 0)} of {funnel_counts.get('started', 0)} sessions reached final step.",
+        f"Average SUS score is {sus.get('average', 0)} (min {sus.get('min', 0)}, max {sus.get('max', 0)}).",
+    ]
+    if top_tasks:
+        observations.append(
+            "Highest friction task: "
+            + ", ".join([f"{item['task_id']} (index {item['friction_index']})" for item in top_tasks[:1]])
+        )
+    if top_confusions:
+        observations.append(
+            "Most common confusion tags: "
+            + ", ".join([f"{item['tag']} ({item['count']})" for item in top_confusions])
+        )
+
+    insights = []
+    if top_themes:
+        insights.append("Recurring user feedback themes: " + ", ".join(item["phrase"] for item in top_themes))
+    if float(sus.get("average", 0) or 0) < 68:
+        insights.append("Usability remains below benchmark (>68), indicating onboarding and flow improvements are needed.")
+    else:
+        insights.append("Usability is above benchmark, indicating core value is understandable for target users.")
+    insights.append("Behavioral drop-off pinpoints where users needed guidance, helping prioritize next iteration.")
+
+    return {
+        "success": True,
+        "slides": {
+            "who_tested": f"Tested with {kpis.get('users_tested', 0)} participants across {kpis.get('sessions_completed', 0)} sessions.",
+            "key_observations": observations[:4],
+            "top_3_insights": insights[:3],
+            "understanding_changed": [
+                "Real usage exposed friction points not obvious during MVP development.",
+                "Observed behavior now guides feature priorities more than assumptions.",
+            ],
+        },
+    }
+
+
+@app.post("/api/admin/seed-sample")
+def seed_admin_sample_sessions(current_user: dict[str, Any] = Depends(get_current_user)):
+    _require_users_collection()
+    _require_test_sessions_collection()
+    _require_admin_user(current_user)
+
+    payloads = _sample_test_sessions_payloads()
+    inserted = 0
+    skipped = 0
+    now = datetime.now(timezone.utc)
+    creator = str(current_user.get("_id", ""))
+
+    for payload in payloads:
+        existing = test_sessions_collection.find_one({
+            "tester_label": payload.get("tester_label"),
+            "session_date": payload.get("session_date"),
+            "created_by": creator,
+        })
+        if existing:
+            skipped += 1
+            continue
+
+        action = TestSessionAction(**payload)
+        doc = _build_test_session_doc(action, current_user)
+        doc["created_at"] = now
+        test_sessions_collection.insert_one(doc)
+        inserted += 1
+
+    return {
+        "success": True,
+        "inserted": inserted,
+        "skipped": skipped,
+        "total_payloads": len(payloads),
     }
 
 
