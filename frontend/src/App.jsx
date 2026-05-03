@@ -36,7 +36,22 @@ const CACHE_MED_USE_KEY = 'polysafe_cache_med_use';
 const SUS_SUBMITTED_KEY = 'polysafe_sus_submitted';
 const FEEDBACK_SUBMITTED_KEY = 'polysafe_feedback_submitted';
 const APP_OPEN_TRACK_KEY = 'polysafe_app_open_tracked_date';
+const AB_VARIANT_KEY = 'polysafe_ab_variant';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.REACT_APP_GOOGLE_CLIENT_ID || '';
+
+// Phase 4B: Deterministically assign A/B variant once per browser
+const getOrAssignAbVariant = () => {
+  try {
+    const stored = localStorage.getItem(AB_VARIANT_KEY);
+    if (stored === 'control' || stored === 'confidence_badges') return stored;
+    // 50/50 split
+    const assigned = Math.random() < 0.5 ? 'control' : 'confidence_badges';
+    localStorage.setItem(AB_VARIANT_KEY, assigned);
+    return assigned;
+  } catch {
+    return 'control';
+  }
+};
 const SUS_QUESTIONS = [
   'I think I would like to use this system frequently.',
   'I found the system unnecessarily complex.',
@@ -288,6 +303,9 @@ const App = () => {
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [switchingAccountEmail, setSwitchingAccountEmail] = useState('');
   const safetyRefreshTimerRef = useRef(null);
+  const [abVariant] = useState(() => getOrAssignAbVariant());
+  // Phase 4B: safety_report_viewed tracked once per user per day (localStorage, not ref)
+  const getSafetyViewedKey = (user) => `polysafe_safety_viewed_${String(user?.email || '').toLowerCase()}`;
 
   const entranceVariants = {
     hidden: { opacity: 0, y: 14 },
@@ -972,7 +990,21 @@ const App = () => {
   useEffect(() => {
     if (!currentUser || activeView !== 'safety') return;
     trackUsageEvent('safety_opened', { meds_count: meds.length, from_view_change: true });
-  }, [activeView, currentUser, meds.length]);
+    // Phase 4B: Track Safety Activation KPI — once per user per day, only when report is loaded
+    if (meds.length >= 2 && interactions.length >= 0) {
+      const safetyViewedKey = getSafetyViewedKey(currentUser);
+      const today = new Date().toISOString().slice(0, 10);
+      if (localStorage.getItem(safetyViewedKey) !== today) {
+        localStorage.setItem(safetyViewedKey, today);
+        trackUsageEvent('safety_report_viewed', {
+          meds_count: meds.length,
+          interactions_count: interactions.length,
+          ab_variant: abVariant,
+          has_high_risk: interactions.some((i) => i.severity === 'High'),
+        });
+      }
+    }
+  }, [activeView, currentUser, meds.length, interactions.length]);
 
   useEffect(() => {
     const initialView = getViewFromPath(window.location.pathname);
@@ -1898,6 +1930,13 @@ const App = () => {
       return;
     }
 
+    // Phase 4B: Track the "Add All" click with A/B variant for experiment measurement
+    trackUsageEvent('add_all_clicked', {
+      ab_variant: abVariant,
+      candidates_count: candidates.length,
+      source: 'ocr_review',
+    });
+
     setBulkAddLoading(true);
     setOcrActionInfo('');
     try {
@@ -2764,6 +2803,7 @@ const App = () => {
         premiumContext={premiumContext}
         premiumPriceUsd={PREMIUM_PRICE_USD}
         onOpenUpgradePage={openUpgradePage}
+        abVariant={abVariant}
       />
 
       <AnimatePresence>

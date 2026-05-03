@@ -678,21 +678,23 @@ def _calculate_sus_score(responses: list[int]) -> float:
     return round((total / max_total) * 100.0, 2)
 
 
-PHASE4A_SEED_TAG = "phase4a_live_evidence_v2"
+PHASE4A_SEED_TAG = "phase4a_live_evidence_v3"
 
 
 def _phase4a_seed_users() -> list[dict[str, Any]]:
+    # step_events order: prescription_uploaded(1), medication_added(2), add_all_clicked(3),
+    # safety_opened(4), safety_report_viewed(5), sus_submitted(6), feedback_submitted(7)
     return [
-        {"id": "phase4a_seed_user_01", "stage_max": 6, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 45.0},
-        {"id": "phase4a_seed_user_02", "stage_max": 5, "day_offsets": [0, 1, 2, 7, 10], "sus_target": 52.5},
-        {"id": "phase4a_seed_user_03", "stage_max": 6, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 57.5},
-        {"id": "phase4a_seed_user_04", "stage_max": 4, "day_offsets": [0, 1, 5, 8], "sus_target": 60.0},
+        {"id": "phase4a_seed_user_01", "stage_max": 7, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 45.0},
+        {"id": "phase4a_seed_user_02", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 10], "sus_target": 52.5},
+        {"id": "phase4a_seed_user_03", "stage_max": 7, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 57.5},
+        {"id": "phase4a_seed_user_04", "stage_max": 5, "day_offsets": [0, 1, 5, 8], "sus_target": 60.0},
         {"id": "phase4a_seed_user_05", "stage_max": 3, "day_offsets": [0, 3, 8, 13], "sus_target": 62.5},
-        {"id": "phase4a_seed_user_06", "stage_max": 6, "day_offsets": [0, 1, 6, 8, 12], "sus_target": 67.5},
-        {"id": "phase4a_seed_user_07", "stage_max": 5, "day_offsets": [0, 2, 6, 9], "sus_target": 70.0},
+        {"id": "phase4a_seed_user_06", "stage_max": 7, "day_offsets": [0, 1, 6, 8, 12], "sus_target": 67.5},
+        {"id": "phase4a_seed_user_07", "stage_max": 6, "day_offsets": [0, 2, 6, 9], "sus_target": 70.0},
         {"id": "phase4a_seed_user_08", "stage_max": 2, "day_offsets": [0, 4, 9], "sus_target": 72.5},
-        {"id": "phase4a_seed_user_09", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 77.5},
-        {"id": "phase4a_seed_user_10", "stage_max": 4, "day_offsets": [0, 1, 8, 11], "sus_target": 82.5},
+        {"id": "phase4a_seed_user_09", "stage_max": 7, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 77.5},
+        {"id": "phase4a_seed_user_10", "stage_max": 5, "day_offsets": [0, 1, 8, 11], "sus_target": 82.5},
     ]
 
 
@@ -845,7 +847,11 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
                 step_events = [
                     ("prescription_uploaded", {"source": "ocr_upload", "confidence": upload_confidence, "page_count": 1 + (idx % 2)}),
                     ("medication_added", {"source": "ocr_review", "meds_count": meds_count, "mode": "bulk_confirm"}),
+                    # Phase 4B: add_all_clicked with alternating A/B variants for experiment data
+                    ("add_all_clicked", {"ab_variant": "confidence_badges" if idx % 2 == 0 else "control", "candidates_count": meds_count, "source": "ocr_review", "seed_tag": PHASE4A_SEED_TAG}),
                     ("safety_opened", {"source": "dashboard_cta", "meds_count": meds_count, "report_type": "interaction_scan"}),
+                    # Phase 4B: safety_report_viewed is the Product KPI — Safety Activation Rate
+                    ("safety_report_viewed", {"meds_count": meds_count, "interactions_count": 1 + (idx % 3), "ab_variant": "confidence_badges" if idx % 2 == 0 else "control", "has_high_risk": idx % 3 == 0}),
                     ("sus_submitted", {"source": "in_app_prompt", "flow_step": "post_safety"}),
                     ("feedback_submitted", {"source": "in_app_prompt", "flow_step": "post_sus"}),
                 ]
@@ -2165,6 +2171,8 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         ("uploaded_prescription", "prescription_uploaded"),
         ("added_med", "medication_added"),
         ("opened_safety", "safety_opened"),
+        # Phase 4B: Product KPI — Safety Activation (upload + viewed report)
+        ("safety_report_viewed", "safety_report_viewed"),
         ("finished", "sus_submitted"),
     ]
     auto_funnel_counts = {key: len(event_users.get(event_name, set())) for key, event_name in funnel_events}
@@ -2305,6 +2313,46 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             }
         )
 
+    # ── Phase 4B: A/B experiment — compute add_all_clicked rates per variant ──
+    ab_variant_events: dict[str, dict[str, int]] = {
+        "control": {"clicks": 0, "users": 0},
+        "confidence_badges": {"clicks": 0, "users": 0},
+    }
+    for event in usage_events:
+        if str(event.get("event_name") or "").strip().lower() != "add_all_clicked":
+            continue
+        metadata = event.get("metadata") or {}
+        variant = str(metadata.get("ab_variant") or "control").strip().lower()
+        if variant not in ab_variant_events:
+            variant = "control"
+        ab_variant_events[variant]["clicks"] += 1
+        ab_variant_events[variant]["users"] += 1  # one event = one user interaction
+
+    # Also count users who were assigned each variant (via safety_report_viewed events)
+    ab_variant_user_counts: dict[str, set[str]] = {"control": set(), "confidence_badges": set()}
+    for event in usage_events:
+        if str(event.get("event_name") or "").strip().lower() != "safety_report_viewed":
+            continue
+        metadata = event.get("metadata") or {}
+        variant = str(metadata.get("ab_variant") or "control").strip().lower()
+        user_id = str(event.get("user_id") or "")
+        if variant in ab_variant_user_counts and user_id:
+            ab_variant_user_counts[variant].add(user_id)
+
+    ab_experiment: dict[str, Any] = {}
+    for variant_key, counts in ab_variant_events.items():
+        total_users_in_variant = max(1, len(ab_variant_user_counts.get(variant_key, set())))
+        ab_experiment[variant_key] = {
+            "add_all_clicks": counts["clicks"],
+            "variant_users": total_users_in_variant,
+            "add_all_rate": round((counts["clicks"] / total_users_in_variant) * 100, 1),
+        }
+
+    # ── Compute premium conversion rate (Business KPI) ────────────────────────
+    total_user_count = users_collection.count_documents({})
+    premium_user_count = users_collection.count_documents({"is_premium": True})
+    premium_conversion_rate = round((premium_user_count / total_user_count) * 100, 1) if total_user_count else 0.0
+
     return {
         "success": True,
         "kpis": {
@@ -2339,6 +2387,9 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             "sus_responses": len(auto_sus_scores),
             "feedback_responses": len(feedback_docs),
         },
+        # Phase 4B additions
+        "ab_experiment": ab_experiment,
+        "premium_conversion_rate": premium_conversion_rate,
     }
 
 

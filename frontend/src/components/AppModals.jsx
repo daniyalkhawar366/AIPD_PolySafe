@@ -54,7 +54,16 @@ const AppModals = ({
   premiumContext,
   premiumPriceUsd,
   onOpenPaymentPage,
+  // Phase 4B A/B experiment prop
+  abVariant = 'control',
 }) => {
+  // Phase 4B: Confidence badge helper for Group B (confidence_badges variant)
+  const getConfidenceBadge = (confidence) => {
+    const score = Number(confidence || 0);
+    if (score >= 0.85) return { label: '✓ High Confidence', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+    if (score >= 0.60) return { label: '~ Medium Confidence', className: 'bg-amber-50 text-amber-700 border-amber-200' };
+    return { label: '? Low Confidence — Review', className: 'bg-red-50 text-red-700 border-red-200' };
+  };
   const premiumMessages = {
     medicine_limit: {
       title: 'Medicine limit reached',
@@ -230,7 +239,21 @@ const AppModals = ({
                       </div>
                       <div className="flex-1">
                         <p className="text-slate-900 font-bold text-lg">{drug.name}</p>
-                        <p className="text-gray-500 text-xs uppercase tracking-tighter">{drug.valid ? 'Verified with RxNorm' : 'Unmatched name: review and confirm'}</p>
+                        {/* Phase 4B A/B Test: Group B shows AI confidence badge */}
+                        {abVariant === 'confidence_badges' ? (
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <span className={`inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full border ${getConfidenceBadge(drug.ocr_confidence).className}`}>
+                              {getConfidenceBadge(drug.ocr_confidence).label}
+                            </span>
+                            {drug.valid && (
+                              <span className="inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-700 border-indigo-200">
+                                ✓ RxNorm Verified
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-gray-500 text-xs uppercase tracking-tighter">{drug.valid ? 'Verified with RxNorm' : 'Unmatched name: review and confirm'}</p>
+                        )}
                         {drug.duplicate_in_profile && (
                           <p className="mt-1 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 inline-flex px-2 py-0.5 rounded-full">
                             Already in profile - will be skipped
