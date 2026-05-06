@@ -110,7 +110,7 @@ const formatUserName = (fullName) => {
 };
 
 const MANUAL_SOURCE_DEFAULT = 'Prescription medicine';
-const PREMIUM_PRICE_USD = 5;
+const PREMIUM_PRICE_USD = 20;
 const FREE_TIER_MED_LIMIT = 6;
 const FREE_TIER_PRESCRIPTION_LIMIT = 2;
 const FREE_TIER_CAREGIVER_PATIENT_LIMIT = 1;
@@ -523,7 +523,11 @@ const App = () => {
     setAdminSeedInfo('');
     setAdminError('');
     try {
-      const res = await axios.post(`${API_BASE}/admin/seed-live-evidence`, {}, getAuthConfig(token));
+      const res = await axios.post(
+        `${API_BASE}/admin/seed-live-evidence`,
+        { reseed_missing_only: false, reset_existing_seeded: true },
+        getAuthConfig(token),
+      );
       const payload = res?.data || {};
       const inserted = payload.inserted_counts || {};
       const skipped = payload.skipped_counts || {};

@@ -1,5 +1,5 @@
 import React from 'react';
-import { RefreshCw, FlaskConical, Target } from 'lucide-react';
+import { RefreshCw, FlaskConical, Target, TrendingUp, Users, DollarSign, Zap, Award } from 'lucide-react';
 
 const AdminEvidenceView = ({
   GlassCard,
@@ -21,6 +21,7 @@ const AdminEvidenceView = ({
   const questions = sus?.questions || [];
   const feedbackRows = analytics?.qualitative?.feedback_rows || [];
   const susBuckets = sus?.buckets || {};
+  const businessMetrics = analytics?.business_metrics || {};
   const bucketTotal = Math.max(
     1,
     (susBuckets?.below_50 || 0) + (susBuckets?.['50_to_68'] || 0) + (susBuckets?.above_68 || 0),
@@ -30,6 +31,10 @@ const AdminEvidenceView = ({
     count: Number(count || 0),
     conversion: Number(funnel?.conversion_percent?.[step] || 0),
   }));
+  
+  // Calculate total users and premium users for display
+  const totalUsers = (funnel?.counts?.started || 0) + (businessMetrics?.active_user_count ? 0 : 0);
+  const premiumUsers = businessMetrics?.mrr ? Math.ceil(businessMetrics.mrr / 20) : 0;
   const quotes = analytics?.qualitative?.top_quotes || [];
 
   // ── Phase 4B: PMF Metrics ─────────────────────────────────────────────────
@@ -52,11 +57,65 @@ const AdminEvidenceView = ({
 
   // A/B experiment data (populated when enough events accumulate)
   const abExperimentData = analytics?.ab_experiment || null;
-  const controlClickRate = abExperimentData?.control?.add_all_rate ?? null;
-  const variantClickRate = abExperimentData?.confidence_badges?.add_all_rate ?? null;
+  const rawControlClickRate = abExperimentData?.control?.add_all_rate ?? null;
+  const rawVariantClickRate = abExperimentData?.confidence_badges?.add_all_rate ?? null;
+  const controlClickRate = rawControlClickRate !== null ? Math.max(0, Math.min(100, rawControlClickRate)) : null;
+  const variantClickRate = rawVariantClickRate !== null ? Math.max(0, Math.min(100, rawVariantClickRate)) : null;
+  // variant user counts (from backend) — used to detect small samples
+  const controlVariantUsers = abExperimentData?.control?.variant_users ?? 0;
+  const confidenceVariantUsers = abExperimentData?.confidence_badges?.variant_users ?? 0;
+  const smallSampleThreshold = 5;
+  const isSmallSample = (controlVariantUsers < smallSampleThreshold) || (confidenceVariantUsers < smallSampleThreshold);
   const abLift = (controlClickRate !== null && variantClickRate !== null)
     ? Math.round(((variantClickRate - controlClickRate) / Math.max(1, controlClickRate)) * 100)
     : null;
+
+  const MetricFlipCard = ({
+    icon: Icon,
+    eyebrow,
+    title,
+    value,
+    note,
+    status,
+    progress,
+    accent,
+    backTitle,
+    backLines,
+  }) => (
+    <div className="metric-flip-card h-full min-h-60">
+      <div className="metric-flip-inner rounded-2xl">
+        <div className={`metric-flip-face rounded-2xl border bg-white p-5 shadow-sm ${accent.border}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className={`rounded-xl p-2.5 ${accent.iconBg}`}>
+              <Icon className={`h-5 w-5 ${accent.iconText}`} />
+            </div>
+            <span className={`text-[10px] font-semibold uppercase tracking-[0.2em] ${accent.eyebrowText}`}>
+              {eyebrow}
+            </span>
+          </div>
+          <p className="mt-4 text-sm font-semibold text-slate-600">{title}</p>
+          <p className={`mt-1 text-4xl font-bold ${accent.valueText}`}>{value}</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className={`h-full rounded-full ${accent.bar}`}
+              style={{ width: `${Math.max(0, Math.min(100, Number(progress || 0)))}%` }}
+            />
+          </div>
+          <p className="mt-2 text-[11px] font-medium text-slate-500">{status}</p>
+        </div>
+
+        <div className={`metric-flip-face metric-flip-back rounded-2xl border p-5 shadow-sm ${accent.backBg} ${accent.border}`}>
+          <p className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${accent.backTitleText}`}>{backTitle}</p>
+          <ul className="mt-3 space-y-2 text-sm text-slate-700">
+            {backLines.map((line) => (
+              <li key={line} className="leading-5">{line}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="h-full overflow-y-auto pr-1 space-y-4">
@@ -110,7 +169,7 @@ const AdminEvidenceView = ({
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Product KPI: Safety Activation Rate */}
-            <div className="rounded-xl border border-slate-200 p-4 bg-gradient-to-br from-indigo-50 to-white">
+            <div className="rounded-xl border border-slate-200 p-4 bg-linear-to-br from-indigo-50 to-white">
               <p className="text-[11px] font-bold uppercase tracking-wide text-indigo-500">Product KPI</p>
               <p className="text-sm font-semibold text-slate-700 mt-1">Safety Activation Rate</p>
               <p className="text-4xl font-bold text-slate-900 mt-2">{safetyActivationRate}%</p>
@@ -128,7 +187,7 @@ const AdminEvidenceView = ({
             </div>
 
             {/* Business KPI: Premium Conversion */}
-            <div className="rounded-xl border border-slate-200 p-4 bg-gradient-to-br from-emerald-50 to-white">
+            <div className="rounded-xl border border-slate-200 p-4 bg-linear-to-br from-emerald-50 to-white">
               <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-600">Business KPI</p>
               <p className="text-sm font-semibold text-slate-700 mt-1">Premium Conversion Rate</p>
               <p className="text-4xl font-bold text-slate-900 mt-2">
@@ -145,7 +204,7 @@ const AdminEvidenceView = ({
             </div>
 
             {/* Funnel Summary */}
-            <div className="rounded-xl border border-slate-200 p-4 bg-gradient-to-br from-violet-50 to-white">
+            <div className="rounded-xl border border-slate-200 p-4 bg-linear-to-br from-violet-50 to-white">
               <p className="text-[11px] font-bold uppercase tracking-wide text-violet-600">Activation Funnel</p>
               <p className="text-sm font-semibold text-slate-700 mt-1">User Journey Steps</p>
               <div className="mt-3 space-y-2 text-sm">
@@ -187,6 +246,7 @@ const AdminEvidenceView = ({
                 {controlClickRate !== null ? `${controlClickRate}%` : '—'}
               </p>
               <p className="text-xs text-slate-500 mt-1">"Add All" click-through rate</p>
+              <p className="text-xs text-slate-400 mt-2">n = {controlVariantUsers}</p>
             </div>
             <div className="rounded-xl border-2 border-amber-200 p-4 bg-amber-50">
               <p className="text-[11px] font-bold uppercase tracking-wide text-amber-600">Group B — Confidence Badges ✨</p>
@@ -195,6 +255,7 @@ const AdminEvidenceView = ({
                 {variantClickRate !== null ? `${variantClickRate}%` : '—'}
               </p>
               <p className="text-xs text-amber-700 mt-1">"Add All" click-through rate</p>
+              <p className="text-xs text-amber-600 mt-2">n = {confidenceVariantUsers}</p>
             </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex flex-wrap items-center justify-between gap-4">
@@ -203,6 +264,9 @@ const AdminEvidenceView = ({
               <p className="text-2xl font-bold mt-0.5 text-slate-900">
                 {abLift !== null ? `${abLift > 0 ? '+' : ''}${abLift}%` : 'Collecting data...'}
               </p>
+              {isSmallSample && (
+                <p className="text-xs text-amber-600 mt-1">Small sample (n = {controlVariantUsers}/{confidenceVariantUsers}) — interpret lift cautiously.</p>
+              )}
             </div>
             <div className="text-sm text-slate-600 max-w-sm">
               <p className="font-semibold text-slate-700">Decision Rule</p>
@@ -211,8 +275,180 @@ const AdminEvidenceView = ({
             </div>
           </div>
           <p className="text-[11px] text-slate-400 mt-2">
-            Hypothesis: AI confidence badges increase "Add All" rate by ≥20%. Variant is assigned once per browser session via localStorage.
+            Hypothesis: AI confidence badges increase "Add All" rate by ≥20%. Variant assignment is recorded with events and persists per session.
           </p>
+        </GlassCard>
+
+        {/* ── Phase 4: Business Metrics Section ─────────────────── */}
+        <GlassCard className="p-6 border border-slate-200 bg-white/80 backdrop-blur-sm shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-500 font-semibold">Phase 4</p>
+              <h3 className="text-2xl font-bold text-slate-900">Business Metrics</h3>
+              <p className="text-sm text-slate-500 mt-1">Flip a card to see how the metric was collected.</p>
+            </div>
+            <span className="text-xs font-semibold px-3 py-1 rounded-full border border-teal-200 bg-teal-50 text-teal-700">
+              Live evidence
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <MetricFlipCard
+              icon={Users}
+              eyebrow="Retention"
+              title="30-day repeat retention"
+              value={`${Math.min(100, Number(businessMetrics?.retention_rate || 0))}%`}
+              note={`${businessMetrics?.active_user_count || 0} users had 5+ active days in the last 30 days.`}
+              status={businessMetrics?.retention_rate >= 50 ? 'Healthy retention' : 'Needs more repeat usage'}
+              progress={businessMetrics?.retention_rate || 0}
+              accent={{
+                border: 'border-blue-200',
+                iconBg: 'bg-blue-50',
+                iconText: 'text-blue-600',
+                eyebrowText: 'text-blue-600',
+                valueText: 'text-blue-700',
+                bar: 'bg-blue-500',
+                backBg: 'bg-blue-50/60',
+                backTitleText: 'text-blue-700',
+              }}
+              backTitle="Collected from usage events"
+              backLines={[
+                'Distinct user IDs in usage_events with activity across at least five different days.',
+                'Formula: repeat-engaged users divided by the registered user base.',
+                'This avoids treating one-off opens as retention.',
+              ]}
+            />
+
+            <MetricFlipCard
+              icon={DollarSign}
+              eyebrow="Revenue"
+              title="Monthly recurring revenue"
+              value={`$${Number(businessMetrics?.mrr || 0)}`}
+              note={`${premiumUsers || 0} premium users × $20 / month.`}
+              status={businessMetrics?.mrr >= 1000 ? 'Scaling' : 'Early revenue' }
+              progress={Math.min(100, ((businessMetrics?.mrr || 0) / 1000) * 100)}
+              accent={{
+                border: 'border-emerald-200',
+                iconBg: 'bg-emerald-50',
+                iconText: 'text-emerald-600',
+                eyebrowText: 'text-emerald-600',
+                valueText: 'text-emerald-700',
+                bar: 'bg-emerald-500',
+                backBg: 'bg-emerald-50/60',
+                backTitleText: 'text-emerald-700',
+              }}
+              backTitle="Collected from paid status"
+              backLines={[
+                'Users flagged is_premium in the users collection.',
+                'Formula: premium users × the $20 plan price (monthly).',
+                'Reflects active paid accounts; updates as users upgrade.',
+              ]}
+            />
+
+            <MetricFlipCard
+              icon={Zap}
+              eyebrow="Cost"
+              title="Customer acquisition cost"
+              value={`$${Number(businessMetrics?.cac || 0)}`}
+              note="Demo baseline until marketing spend is tracked."
+              status={businessMetrics?.cac <= 50 ? 'Healthy demo baseline' : 'Replace with real spend data'}
+              progress={Math.max(0, 100 - Math.min(100, ((businessMetrics?.cac || 0) / 60) * 100))}
+              accent={{
+                border: 'border-amber-200',
+                iconBg: 'bg-amber-50',
+                iconText: 'text-amber-600',
+                eyebrowText: 'text-amber-600',
+                valueText: 'text-amber-700',
+                bar: 'bg-amber-500',
+                backBg: 'bg-amber-50/60',
+                backTitleText: 'text-amber-700',
+              }}
+              backTitle="Collected from campaign spend"
+              backLines={[
+                'Estimated from a demo baseline when campaign spend is not instrumented.',
+                'Formula: total acquisition spend ÷ new users acquired.',
+                'Replace with instrumented marketing data for production CAC.',
+              ]}
+            />
+
+            <MetricFlipCard
+              icon={Award}
+              eyebrow="Value"
+              title="Lifetime value"
+              value={`$${Number(businessMetrics?.ltv || 0)}`}
+              note="Per paying customer, with margin and expected lifetime baked in."
+              status={businessMetrics?.ltv >= 500 ? 'Healthy value' : 'Needs stronger retention'}
+              progress={Math.min(100, ((businessMetrics?.ltv || 0) / 1000) * 100)}
+              accent={{
+                border: 'border-violet-200',
+                iconBg: 'bg-violet-50',
+                iconText: 'text-violet-600',
+                eyebrowText: 'text-violet-600',
+                valueText: 'text-violet-700',
+                bar: 'bg-violet-500',
+                backBg: 'bg-violet-50/60',
+                backTitleText: 'text-violet-700',
+              }}
+              backTitle="Collected from revenue estimate"
+              backLines={[
+                'Estimate uses revenue per paying customer (not aggregate MRR).',
+                'Formula: $20 monthly × 80% margin × 10-month expected lifetime = $160 per paying customer.',
+                'With few paying users, per-customer LTV can exceed total MRR — this is normal for early samples.',
+              ]}
+            />
+
+            <MetricFlipCard
+              icon={TrendingUp}
+              eyebrow="Ratio"
+              title="LTV / CAC"
+              value={`${Number(businessMetrics?.ltv_cac_ratio || 0)}x`}
+              note="Measures whether the business can buy customers efficiently."
+              status={businessMetrics?.ltv_cac_ratio >= 3 ? 'Healthy unit economics' : 'Too close to break-even'}
+              progress={Math.min(100, ((businessMetrics?.ltv_cac_ratio || 0) / 4) * 100)}
+              accent={{
+                border: 'border-rose-200',
+                iconBg: 'bg-rose-50',
+                iconText: 'text-rose-600',
+                eyebrowText: 'text-rose-600',
+                valueText: 'text-rose-700',
+                bar: 'bg-rose-500',
+                backBg: 'bg-rose-50/60',
+                backTitleText: 'text-rose-700',
+              }}
+              backTitle="Collected from the two cards above"
+              backLines={[
+                'This is a derived ratio, not a direct database field.',
+                'Formula: lifetime value divided by acquisition cost.',
+                'Around 3x to 5x is healthy for an early-stage product.',
+              ]}
+            />
+
+            <MetricFlipCard
+              icon={Award}
+              eyebrow="Score"
+              title="Net promoter score"
+              value={`${Number(businessMetrics?.nps || 0)}`}
+              note={`${businessMetrics?.promoter_percent || 0}% promoters, ${businessMetrics?.detractor_percent || 0}% detractors.`}
+              status={businessMetrics?.nps >= 50 ? 'Excellent' : businessMetrics?.nps >= 0 ? 'Good' : 'Needs work'}
+              progress={Math.min(100, ((Number(businessMetrics?.nps || 0) + 100) / 2))}
+              accent={{
+                border: 'border-cyan-200',
+                iconBg: 'bg-cyan-50',
+                iconText: 'text-cyan-600',
+                eyebrowText: 'text-cyan-600',
+                valueText: 'text-cyan-700',
+                bar: 'bg-cyan-500',
+                backBg: 'bg-cyan-50/60',
+                backTitleText: 'text-cyan-700',
+              }}
+              backTitle="Collected from SUS responses"
+              backLines={[
+                'Latest SUS responses are mapped into promoter and detractor bands.',
+                'Formula: percent promoters minus percent detractors.',
+                'Promoters are SUS > 68; detractors are SUS < 50.',
+              ]}
+            />
+          </div>
         </GlassCard>
 
         {/* ── Standard KPI Strip ────────────────────────────────── */}
@@ -309,7 +545,7 @@ const AdminEvidenceView = ({
           <h3 className="text-lg font-semibold">Feedback Table</h3>
           <p className="text-sm text-slate-600 mt-1">Hesitation, most useful signal, and pay intent</p>
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[780px] text-sm">
+            <table className="w-full min-w-195 text-sm">
               <thead className="text-left text-slate-500 border-b border-slate-200">
                 <tr>
                   <th className="py-2 pr-3">Status</th>
