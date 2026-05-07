@@ -856,24 +856,25 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
             }
         )
 
-        feedback_seed = feedback_entries[idx]
-        feedback_created_at = base_start + timedelta(days=int(day_offsets[-1]), hours=17, minutes=idx * 2)
-        feedback_docs.append(
-            {
-                "user_id": user_id,
-                "profile_id": DEFAULT_PROFILE_ID,
-                "useful": feedback_seed["useful"],
-                "confusing": feedback_seed["confusing"],
-                "would_use_again": feedback_seed["would_use_again"],
-                "would_pay": feedback_seed["would_pay"],
-                "top_quote": feedback_seed["top_quote"],
-                "notes": feedback_seed["notes"],
-                "context": "phase4a_seed_live",
-                "created_at": feedback_created_at,
-                "created_at_date": feedback_created_at.date().isoformat(),
-                "seed_tag": PHASE4A_SEED_TAG,
-            }
-        )
+        if feedback_entries:
+            feedback_seed = feedback_entries[idx % len(feedback_entries)]
+            feedback_created_at = base_start + timedelta(days=int(day_offsets[-1]), hours=17, minutes=idx * 2)
+            feedback_docs.append(
+                {
+                    "user_id": user_id,
+                    "profile_id": DEFAULT_PROFILE_ID,
+                    "useful": feedback_seed["useful"],
+                    "confusing": feedback_seed["confusing"],
+                    "would_use_again": feedback_seed["would_use_again"],
+                    "would_pay": feedback_seed["would_pay"],
+                    "top_quote": feedback_seed["top_quote"],
+                    "notes": feedback_seed["notes"],
+                    "context": "phase4a_seed_live",
+                    "created_at": feedback_created_at,
+                    "created_at_date": feedback_created_at.date().isoformat(),
+                    "seed_tag": PHASE4A_SEED_TAG,
+                }
+            )
 
     return events, sus_docs, feedback_docs
 
@@ -2649,9 +2650,51 @@ def reset_live_evidence(current_user: dict[str, Any] = Depends(get_current_user)
     _require_feedback_collection()
     _require_admin_user(current_user)
 
-    deleted_events = usage_events_collection.delete_many({}).deleted_count
-    deleted_sus = sus_responses_collection.delete_many({}).deleted_count
-    deleted_feedback = feedback_collection.delete_many({}).deleted_count
+    # Reset should only affect seeded evidence and then restore a clean baseline.
+    user_profiles = _phase4a_seed_users()
+    user_ids = [str(item["id"]) for item in user_profiles]
+
+    deleted_events = usage_events_collection.delete_many(
+        {
+            "user_id": {"$in": user_ids},
+            "$or": [
+                {"seed_tag": PHASE4A_SEED_TAG},
+                {"metadata.seed_tag": PHASE4A_SEED_TAG},
+            ],
+        }
+    ).deleted_count
+    deleted_sus = sus_responses_collection.delete_many(
+        {
+            "user_id": {"$in": user_ids},
+            "$or": [
+                {"seed_tag": PHASE4A_SEED_TAG},
+                {"context": "phase4a_seed_live"},
+            ],
+        }
+    ).deleted_count
+    deleted_feedback = feedback_collection.delete_many(
+        {
+            "user_id": {"$in": user_ids},
+            "$or": [
+                {"seed_tag": PHASE4A_SEED_TAG},
+                {"context": "phase4a_seed_live"},
+            ],
+        }
+    ).deleted_count
+
+    # Recreate seeded baseline so admin evidence remains populated after reset.
+    now = datetime.now(timezone.utc)
+    events_to_insert, sus_to_insert, feedback_to_insert = _build_phase4a_seed_documents(now)
+
+    inserted_events = 0
+    inserted_sus = 0
+    inserted_feedback = 0
+    if events_to_insert:
+        inserted_events = len(usage_events_collection.insert_many(events_to_insert, ordered=False).inserted_ids)
+    if sus_to_insert:
+        inserted_sus = len(sus_responses_collection.insert_many(sus_to_insert, ordered=False).inserted_ids)
+    if feedback_to_insert:
+        inserted_feedback = len(feedback_collection.insert_many(feedback_to_insert, ordered=False).inserted_ids)
 
     return {
         "success": True,
@@ -2659,6 +2702,11 @@ def reset_live_evidence(current_user: dict[str, Any] = Depends(get_current_user)
             "usage_events": int(deleted_events),
             "sus_responses": int(deleted_sus),
             "feedback": int(deleted_feedback),
+        },
+        "reseeded_counts": {
+            "usage_events": int(inserted_events),
+            "sus_responses": int(inserted_sus),
+            "feedback": int(inserted_feedback),
         },
     }
 
