@@ -803,6 +803,8 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
                 step_events = [
                     ("prescription_uploaded", {"source": "ocr_upload", "confidence": upload_confidence, "page_count": 1 + (idx % 2)}),
                     ("medication_added", {"source": "ocr_review", "meds_count": meds_count, "mode": "bulk_confirm"}),
+                    # Phase 4B: add_all_clicked with alternating A/B variants for experiment data
+                    ("add_all_clicked", {"ab_variant": "confidence_badges" if idx % 2 == 0 else "control", "candidates_count": meds_count, "source": "ocr_review", "seed_tag": PHASE4A_SEED_TAG}),
                     ("safety_opened", {"source": "dashboard_cta", "meds_count": meds_count, "report_type": "interaction_scan"}),
                     # Phase 4B: safety_report_viewed is the Product KPI — Safety Activation Rate
                     ("safety_report_viewed", {"meds_count": meds_count, "interactions_count": 1 + (idx % 3), "ab_variant": "confidence_badges" if idx % 2 == 0 else "control", "has_high_risk": idx % 3 == 0}),
