@@ -2369,9 +2369,19 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         }
 
     # ── Compute premium conversion rate (Business KPI) ────────────────────────
-    total_user_count = users_collection.count_documents({})
+    # Use the broader analytics cohort as denominator so this metric reflects the
+    # same user base considered in the admin evidence funnel.
+    registered_user_count = users_collection.count_documents({})
     premium_user_count = users_collection.count_documents({"is_premium": True})
-    premium_conversion_rate = round((premium_user_count / total_user_count) * 100, 1) if total_user_count else 0.0
+    conversion_cohort_users = max(registered_user_count, total_auto_users, auto_started)
+    premium_conversion_rate = (
+        round((premium_user_count / conversion_cohort_users) * 100, 1)
+        if conversion_cohort_users
+        else 0.0
+    )
+
+    # Preserve existing variable name for downstream business-metric calculations.
+    total_user_count = registered_user_count
 
     # ── Phase 4: Business Metrics Implementation ───────────────────────────────
     # 1. Retention Rate = repeat-engaged users (5+ active days in the last 30 days) / Total Users
@@ -2502,6 +2512,9 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
             "active_user_count": active_user_count,
             "promoter_percent": promoter_percent,
             "detractor_percent": detractor_percent,
+            "registered_user_count": registered_user_count,
+            "conversion_cohort_users": conversion_cohort_users,
+            "premium_user_count": premium_user_count,
         },
     }
 

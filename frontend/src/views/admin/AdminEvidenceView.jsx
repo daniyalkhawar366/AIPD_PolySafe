@@ -69,6 +69,9 @@ const AdminEvidenceView = ({
   const abLift = (controlClickRate !== null && variantClickRate !== null)
     ? Math.round(((variantClickRate - controlClickRate) / Math.max(1, controlClickRate)) * 100)
     : null;
+  const premiumConversionDisplayRate = analytics?.premium_conversion_rate != null
+    ? Math.floor(Number(analytics.premium_conversion_rate))
+    : null;
 
   const MetricFlipCard = ({
     icon: Icon,
@@ -191,11 +194,18 @@ const AdminEvidenceView = ({
               <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-600">Business KPI</p>
               <p className="text-sm font-semibold text-slate-700 mt-1">Premium Conversion Rate</p>
               <p className="text-4xl font-bold text-slate-900 mt-2">
-                {analytics?.premium_conversion_rate != null
-                  ? `${analytics.premium_conversion_rate}%`
+                {premiumConversionDisplayRate != null
+                  ? `${premiumConversionDisplayRate}%`
                   : '—'}
               </p>
-              <p className="text-xs text-slate-500 mt-1">Free → Paid upgrades / total registered users</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Free → Paid upgrades / total users in analytics cohort
+              </p>
+              {businessMetrics?.premium_user_count != null && businessMetrics?.conversion_cohort_users != null && (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {businessMetrics.premium_user_count} premium of {businessMetrics.conversion_cohort_users} users considered
+                </p>
+              )}
               <div className="mt-3 space-y-1 text-[11px] text-slate-500 border-t border-slate-100 pt-2">
                 <p>🔴 &lt;2% — No PMF</p>
                 <p>🟡 2–5% — Early PMF</p>
