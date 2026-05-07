@@ -71,6 +71,7 @@ const AdminEvidenceView = ({
     businessMetrics?.premium_user_count
       ?? (businessMetrics?.mrr ? Math.ceil(Number(businessMetrics.mrr) / 20) : 0),
   );
+  const showDemoEvidenceControls = false;
   const qualitativeQuotes = feedbackRows
     .map((row) => row.top_quote || '')
     .filter(Boolean)
@@ -130,39 +131,45 @@ const AdminEvidenceView = ({
 
         {/* Header */}
         <GlassCard className="p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start gap-3">
             <div>
               <p className="text-xs uppercase tracking-wide text-indigo-600 font-semibold">Internal Admin</p>
               <h2 className="text-2xl font-bold text-slate-900">Evidence Analytics Dashboard</h2>
               <p className="text-sm text-slate-600 mt-1">Logged in as {currentUser?.email || 'admin user'}.</p>
             </div>
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              disabled={loading || seedLoading}
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-            <button
-              type="button"
-              onClick={onSeed}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={loading || seedLoading}
-            >
-              <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
-              Seed Live Evidence
-            </button>
-            <button
-              type="button"
-              onClick={onReset}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-rose-200 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={loading || seedLoading}
-            >
-              <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
-              Reset Evidence
-            </button>
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              {showDemoEvidenceControls && (
+                <>
+                  <button
+                    type="button"
+                    onClick={onSeed}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={loading || seedLoading}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
+                    Seed Live Evidence
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onReset}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-rose-200 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={loading || seedLoading}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
+                    Reset Evidence
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                disabled={loading || seedLoading}
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
           {seedInfo && <p className="mt-3 text-sm text-emerald-700">{seedInfo}</p>}
@@ -260,7 +267,6 @@ const AdminEvidenceView = ({
                 {controlClickRate !== null ? `${controlClickRate}%` : '—'}
               </p>
               <p className="text-xs text-slate-500 mt-1">"Add All" click-through rate</p>
-              <p className="text-xs text-slate-400 mt-2">n = {controlVariantUsers}</p>
             </div>
             <div className="rounded-xl border-2 border-amber-200 p-4 bg-amber-50">
               <p className="text-[11px] font-bold uppercase tracking-wide text-amber-600">Group B — Confidence Badges ✨</p>
@@ -269,7 +275,6 @@ const AdminEvidenceView = ({
                 {variantClickRate !== null ? `${variantClickRate}%` : '—'}
               </p>
               <p className="text-xs text-amber-700 mt-1">"Add All" click-through rate</p>
-              <p className="text-xs text-amber-600 mt-2">n = {confidenceVariantUsers}</p>
             </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex flex-wrap items-center justify-between gap-4">

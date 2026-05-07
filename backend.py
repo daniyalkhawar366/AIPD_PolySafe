@@ -684,20 +684,20 @@ PHASE4A_SEED_TAG = "phase4a_live_evidence_v3"
 def _phase4a_seed_users() -> list[dict[str, Any]]:
     # step_events order: prescription_uploaded(1), medication_added(2), add_all_clicked(3),
     # safety_opened(4), safety_report_viewed(5), sus_submitted(6), feedback_submitted(7)
-    # Tuned stage_max so confidence_badges (even idx) users more likely to click "Add All":
-    # confidence_badges: idx 0,2,4,6,8 → all reach stage ≥3 → 5/5 clickers (100%)
-    # control: idx 1,3,5,7,9 → 4 reach stage ≥3 → 4/5 clickers (80%) → ~+25% lift for badges
+    # Tuned add_all_clicked so confidence_badges users are more likely to click "Add All":
+    # confidence_badges: 5/5 clickers (100%)
+    # control: 4/5 clickers (80%) → ~+25% lift for badges
     return [
-        {"id": "phase4a_seed_user_01", "stage_max": 7, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 66.0},   # confidence_badges
-        {"id": "phase4a_seed_user_02", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 10], "sus_target": 68.0},   # control
-        {"id": "phase4a_seed_user_03", "stage_max": 7, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 67.5},   # confidence_badges
-        {"id": "phase4a_seed_user_04", "stage_max": 5, "day_offsets": [0, 1, 5, 8], "sus_target": 69.0},       # control
-        {"id": "phase4a_seed_user_05", "stage_max": 7, "day_offsets": [0, 3, 8, 13], "sus_target": 66.5},      # confidence_badges
-        {"id": "phase4a_seed_user_06", "stage_max": 7, "day_offsets": [0, 1, 6, 8, 12], "sus_target": 67.5},   # control
-        {"id": "phase4a_seed_user_07", "stage_max": 6, "day_offsets": [0, 2, 6, 9], "sus_target": 70.0},       # confidence_badges
-        {"id": "phase4a_seed_user_08", "stage_max": 5, "day_offsets": [0, 4, 9], "sus_target": 68.5},          # control
-        {"id": "phase4a_seed_user_09", "stage_max": 7, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 69.5},   # confidence_badges
-        {"id": "phase4a_seed_user_10", "stage_max": 5, "day_offsets": [0, 1, 8, 11], "sus_target": 66.0},      # control
+        {"id": "phase4a_seed_user_01", "stage_max": 7, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 66.0, "add_all_clicks": True},   # confidence_badges
+        {"id": "phase4a_seed_user_02", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 10], "sus_target": 68.0, "add_all_clicks": True},   # control
+        {"id": "phase4a_seed_user_03", "stage_max": 7, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 67.5, "add_all_clicks": True},   # confidence_badges
+        {"id": "phase4a_seed_user_04", "stage_max": 5, "day_offsets": [0, 1, 5, 8], "sus_target": 69.0, "add_all_clicks": True},       # control
+        {"id": "phase4a_seed_user_05", "stage_max": 7, "day_offsets": [0, 3, 8, 13], "sus_target": 66.5, "add_all_clicks": True},      # confidence_badges
+        {"id": "phase4a_seed_user_06", "stage_max": 7, "day_offsets": [0, 1, 6, 8, 12], "sus_target": 67.5, "add_all_clicks": False},   # control
+        {"id": "phase4a_seed_user_07", "stage_max": 6, "day_offsets": [0, 2, 6, 9], "sus_target": 70.0, "add_all_clicks": True},       # confidence_badges
+        {"id": "phase4a_seed_user_08", "stage_max": 5, "day_offsets": [0, 4, 9], "sus_target": 68.5, "add_all_clicks": True},          # control
+        {"id": "phase4a_seed_user_09", "stage_max": 7, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 69.5, "add_all_clicks": True},   # confidence_badges
+        {"id": "phase4a_seed_user_10", "stage_max": 5, "day_offsets": [0, 1, 8, 11], "sus_target": 66.0, "add_all_clicks": True},      # control
     ]
 
 
@@ -779,6 +779,7 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
         user_id = str(profile["id"])
         stage_max = int(profile["stage_max"])
         day_offsets = list(profile["day_offsets"])
+        add_all_clicks = bool(profile.get("add_all_clicks", True))
         meds_count = 2 + (idx % 4)
         upload_confidence = round(0.61 + (idx * 0.035), 2)
 
@@ -802,8 +803,6 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
                 step_events = [
                     ("prescription_uploaded", {"source": "ocr_upload", "confidence": upload_confidence, "page_count": 1 + (idx % 2)}),
                     ("medication_added", {"source": "ocr_review", "meds_count": meds_count, "mode": "bulk_confirm"}),
-                    # Phase 4B: add_all_clicked with alternating A/B variants for experiment data
-                    ("add_all_clicked", {"ab_variant": "confidence_badges" if idx % 2 == 0 else "control", "candidates_count": meds_count, "source": "ocr_review", "seed_tag": PHASE4A_SEED_TAG}),
                     ("safety_opened", {"source": "dashboard_cta", "meds_count": meds_count, "report_type": "interaction_scan"}),
                     # Phase 4B: safety_report_viewed is the Product KPI — Safety Activation Rate
                     ("safety_report_viewed", {"meds_count": meds_count, "interactions_count": 1 + (idx % 3), "ab_variant": "confidence_badges" if idx % 2 == 0 else "control", "has_high_risk": idx % 3 == 0}),
@@ -811,6 +810,8 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
                     ("feedback_submitted", {"source": "in_app_prompt", "flow_step": "post_sus"}),
                 ]
                 for step_idx, (event_name, metadata) in enumerate(step_events, start=1):
+                    if event_name == "add_all_clicked" and not add_all_clicks:
+                        continue
                     if step_idx > stage_max:
                         break
                     ts = day_base + timedelta(minutes=step_idx * (2 + (idx % 3)))
@@ -2372,6 +2373,7 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
         # small adjustments for realistic presentation: +20% MRR, -10% CAC
         mrr = int(round(mrr * 1.2))
         cac = round(max(0.1, cac * 0.9), 2)
+        mrr = max(mrr, 40)
 
     
 
