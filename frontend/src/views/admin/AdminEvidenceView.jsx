@@ -67,6 +67,10 @@ const AdminEvidenceView = ({
   const premiumConversionDisplayRate = analytics?.premium_conversion_rate != null
     ? Math.floor(Number(analytics.premium_conversion_rate))
     : null;
+  const premiumUsers = Number(
+    businessMetrics?.premium_user_count
+      ?? (businessMetrics?.mrr ? Math.ceil(Number(businessMetrics.mrr) / 20) : 0),
+  );
   const qualitativeQuotes = feedbackRows
     .map((row) => row.top_quote || '')
     .filter(Boolean)
