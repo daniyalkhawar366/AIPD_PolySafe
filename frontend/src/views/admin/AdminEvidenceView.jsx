@@ -31,11 +31,6 @@ const AdminEvidenceView = ({
     count: Number(count || 0),
     conversion: Number(funnel?.conversion_percent?.[step] || 0),
   }));
-  
-  // Calculate total users and premium users for display
-  const totalUsers = (funnel?.counts?.started || 0) + (businessMetrics?.active_user_count ? 0 : 0);
-  const premiumUsers = businessMetrics?.mrr ? Math.ceil(businessMetrics.mrr / 20) : 0;
-  const quotes = analytics?.qualitative?.top_quotes || [];
 
   // ── Phase 4B: PMF Metrics ─────────────────────────────────────────────────
   const funnelCounts = funnel?.counts || {};
@@ -72,6 +67,11 @@ const AdminEvidenceView = ({
   const premiumConversionDisplayRate = analytics?.premium_conversion_rate != null
     ? Math.floor(Number(analytics.premium_conversion_rate))
     : null;
+  const qualitativeQuotes = feedbackRows
+    .map((row) => row.top_quote || '')
+    .filter(Boolean)
+    .slice(0, 5);
+  const qualitativeResponsesCount = Number(liveSummary.feedback_responses || 0);
 
   const MetricFlipCard = ({
     icon: Icon,
@@ -536,16 +536,17 @@ const AdminEvidenceView = ({
 
           <GlassCard className="p-4">
             <h3 className="text-lg font-semibold">Qualitative Highlights</h3>
-            <p className="text-sm text-slate-600 mt-1">Recent user quotes</p>
+            <p className="text-sm text-slate-600 mt-1">Recent qualitative reflections from the latest feedback entries</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-700">
-              {quotes.slice(0, 5).map((quote) => (
+              {qualitativeQuotes.map((quote) => (
                 <li key={quote} className="border-l-2 border-indigo-300 pl-2">"{quote}"</li>
               ))}
-              {quotes.length === 0 && <li className="text-slate-500">No quotes yet.</li>}
+              {qualitativeQuotes.length === 0 && <li className="text-slate-500">No qualitative reflections yet.</li>}
             </ul>
             <div className="mt-4 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 bg-slate-50">
               <p>Sessions completed: {kpis.sessions_completed || 0}</p>
               <p>SUS submissions: {liveSummary.sus_responses || 0}</p>
+              <p>Qualitative reflections: {qualitativeResponsesCount}</p>
               <p>Avg session duration: 4 min</p>
             </div>
           </GlassCard>

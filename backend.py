@@ -2285,6 +2285,7 @@ def get_admin_analytics(current_user: dict[str, Any] = Depends(get_current_user)
                 "most_useful": str(doc.get("useful", "")).strip()[:52] or "safety report",
                 "would_pay": would_pay[:34] or "maybe",
                 "would_use_again": use_again[:42] or "yes",
+                "top_quote": str(doc.get("top_quote", "")).strip()[:120] or "",
             }
         )
 
