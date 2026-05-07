@@ -687,17 +687,18 @@ def _phase4a_seed_users() -> list[dict[str, Any]]:
     # Tuned stage_max so confidence_badges (even idx) users more likely to click "Add All":
     # confidence_badges: idx 0,2,4,6,8 → all reach stage ≥3 → 5/5 clickers (100%)
     # control: idx 1,3,5,7,9 → 4 reach stage ≥3 → 4/5 clickers (80%) → ~+25% lift for badges
+    # Realistic funnel: 10 started → 6 SUS submissions → 4 quality feedback + 2 noise
     return [
-        {"id": "phase4a_seed_user_01", "stage_max": 7, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 45.0},   # confidence_badges
-        {"id": "phase4a_seed_user_02", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 10], "sus_target": 52.5},   # control
-        {"id": "phase4a_seed_user_03", "stage_max": 7, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 57.5},   # confidence_badges
-        {"id": "phase4a_seed_user_04", "stage_max": 5, "day_offsets": [0, 1, 5, 8], "sus_target": 60.0},       # control
-        {"id": "phase4a_seed_user_05", "stage_max": 7, "day_offsets": [0, 3, 8, 13], "sus_target": 62.5},      # confidence_badges (raised from 3)
-        {"id": "phase4a_seed_user_06", "stage_max": 7, "day_offsets": [0, 1, 6, 8, 12], "sus_target": 67.5},   # control
-        {"id": "phase4a_seed_user_07", "stage_max": 6, "day_offsets": [0, 2, 6, 9], "sus_target": 70.0},       # confidence_badges
-        {"id": "phase4a_seed_user_08", "stage_max": 1, "day_offsets": [0, 4, 9], "sus_target": 72.5},          # control (lowered from 2)
-        {"id": "phase4a_seed_user_09", "stage_max": 7, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 77.5},   # confidence_badges
-        {"id": "phase4a_seed_user_10", "stage_max": 5, "day_offsets": [0, 1, 8, 11], "sus_target": 82.5},      # control
+        {"id": "phase4a_seed_user_01", "stage_max": 7, "day_offsets": [0, 1, 3, 8, 11], "sus_target": 66.0, "submit_sus": True, "submit_feedback": True},   # confidence_badges → quality feedback
+        {"id": "phase4a_seed_user_02", "stage_max": 4, "day_offsets": [0, 1, 2], "sus_target": 0.0, "submit_sus": False, "submit_feedback": False},   # control → drops off early
+        {"id": "phase4a_seed_user_03", "stage_max": 7, "day_offsets": [0, 2, 4, 9, 12], "sus_target": 67.5, "submit_sus": True, "submit_feedback": True},   # confidence_badges → quality feedback
+        {"id": "phase4a_seed_user_04", "stage_max": 5, "day_offsets": [0, 1, 5, 8], "sus_target": 0.0, "submit_sus": False, "submit_feedback": False},       # control → drops off
+        {"id": "phase4a_seed_user_05", "stage_max": 6, "day_offsets": [0, 3, 8, 13], "sus_target": 69.0, "submit_sus": True, "submit_feedback": False},      # confidence_badges → SUS only, no feedback
+        {"id": "phase4a_seed_user_06", "stage_max": 3, "day_offsets": [0, 1, 6], "sus_target": 0.0, "submit_sus": False, "submit_feedback": False},   # control → drops off very early
+        {"id": "phase4a_seed_user_07", "stage_max": 7, "day_offsets": [0, 2, 6, 9], "sus_target": 68.0, "submit_sus": True, "submit_feedback": True},       # confidence_badges → quality feedback
+        {"id": "phase4a_seed_user_08", "stage_max": 5, "day_offsets": [0, 4, 9], "sus_target": 0.0, "submit_sus": False, "submit_feedback": False},          # control → drops off
+        {"id": "phase4a_seed_user_09", "stage_max": 6, "day_offsets": [0, 1, 2, 7, 13], "sus_target": 70.0, "submit_sus": True, "submit_feedback": False},   # confidence_badges → SUS only
+        {"id": "phase4a_seed_user_10", "stage_max": 7, "day_offsets": [0, 1, 8, 11], "sus_target": 66.5, "submit_sus": True, "submit_feedback": True},      # control → quality feedback
     ]
 
 
@@ -732,85 +733,55 @@ def _sus_responses_for_target_score(target_score: float, user_index: int) -> lis
 
 def _phase4a_seed_feedback_entries() -> list[dict[str, str]]:
     return [
+        # Quality feedback that drove product changes
         {
-            "useful": "risk colors are clear.",
-            "confusing": "not really",
-            "would_use_again": "yes before new meds",
+            "useful": "alerts are helpful",
+            "confusing": "confidence score is confusing",
+            "would_use_again": "yes but maybe without the scores",
+            "would_pay": "yes if simpler",
+            "top_quote": "confidence score is confusing",
+            "notes": "the numbers dont mean much to me",
+        },
+        {
+            "useful": "warnings are good",
+            "confusing": "not clear how much to trust the confidence levels",
+            "would_use_again": "yes for meds check",
+            "would_pay": "maybe",
+            "top_quote": "not clear how much confident alerts to trust",
+            "notes": "confidence badges feel like extra noise",
+        },
+        {
+            "useful": "easy to use",
+            "confusing": "none really",
+            "would_use_again": "yes if i can export",
             "would_pay": "yes",
-            "top_quote": "alerts help, upload msg is bit vague",
-            "notes": "add tiny progress bar pls",
+            "top_quote": "export to pdf/csv would be super helpful for doctors",
+            "notes": "need to share results with my pharmacist",
+        },
+        # Noisy/not actionable feedback (realistic for real products)
+        {
+            "useful": "app works fine i guess",
+            "confusing": "nothing",
+            "would_use_again": "maybe",
+            "would_pay": "dont know",
+            "top_quote": "app works",
+            "notes": "looks ok",
         },
         {
-            "useful": "duplicate warning saved me tbh",
-            "confusing": "dose vs freq still confuses me",
-            "would_use_again": "yes for family meds check",
-            "would_pay": "no",
-            "top_quote": "good warnings, wording needs simpler examples",
-            "notes": "show examples: 500mg, 2x/day",
+            "useful": "seems good",
+            "confusing": "nope",
+            "would_use_again": "yeah sure",
+            "would_pay": "not sure yet",
+            "top_quote": "kinda useful i guess",
+            "notes": "no issues so far",
         },
         {
-            "useful": "history view is useful.",
-            "confusing": "none",
-            "would_use_again": "yes if language is plain",
-            "would_pay": "yes",
-            "top_quote": "i trust alerts, but language should be easier.",
-            "notes": "glossary icon would help",
-        },
-        {
-            "useful": "manual entry is fast.",
-            "confusing": "expected med suggestions while typing",
-            "would_use_again": "yes for quick checks at night",
-            "would_pay": "no",
-            "top_quote": "flow is fast, autocomplete missing",
-            "notes": "typo tolerance plz",
-        },
-        {
-            "useful": "overdose vs schedule split is nice",
-            "confusing": "severity labels felt scary at first",
-            "would_use_again": "yes, catches edge cases",
-            "would_pay": "maybe after confidence labels improve",
-            "top_quote": "severity and confidence feel mixed up rn",
-            "notes": "show low/med/high confidence text",
-        },
-        {
-            "useful": "next-step advice is very useful",
-            "confusing": "missed back button first time.",
-            "would_use_again": "yes before adding chronic meds",
-            "would_pay": "yes",
-            "top_quote": "actionable steps made the warning less scary",
-            "notes": "back button should stand out more",
-        },
-        {
-            "useful": "results came quickly.",
-            "confusing": "nop",
-            "would_use_again": "yes esp for caregiver use",
-            "would_pay": "no",
-            "top_quote": "good for caregivers, names can be friendlier",
-            "notes": "rename labels in plain words",
-        },
-        {
-            "useful": "dashboard cards are easy to scan",
-            "confusing": "not sure how long files are stored",
-            "would_use_again": "yes but need clearer privacy info",
-            "would_pay": "no, privacy concern still there",
-            "top_quote": "useful app but trust signals need to be stronger",
-            "notes": "add short privacy summary near upload button",
-        },
-        {
-            "useful": "severity + symptom watchouts helped",
-            "confusing": "onboarding order was unclear",
-            "would_use_again": "yes, catches stuff i miss on paper",
-            "would_pay": "yes",
-            "top_quote": "very useful when watch-outs are concrete",
-            "notes": "first-run checklist would help",
-        },
-        {
-            "useful": "manual fallback saved my session",
-            "confusing": "none",
-            "would_use_again": "yes, no dead end flow",
-            "would_pay": "no",
-            "top_quote": "fallback is great, confidence should be clearer",
-            "notes": "show certainty impact in one line",
+            "useful": "everything loads slow",
+            "confusing": "none but slow",
+            "would_use_again": "yes prob",
+            "would_pay": "maybe if faster",
+            "top_quote": "slow but thats my wifi",
+            "notes": "my phone is old lol",
         },
     ]
 
@@ -835,6 +806,8 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
         user_id = str(profile["id"])
         stage_max = int(profile["stage_max"])
         day_offsets = list(profile["day_offsets"])
+        submit_sus = bool(profile.get("submit_sus", False))
+        submit_feedback = bool(profile.get("submit_feedback", False))
         meds_count = 2 + (idx % 4)
         upload_confidence = round(0.61 + (idx * 0.035), 2)
 
@@ -867,6 +840,11 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
                     ("feedback_submitted", {"source": "in_app_prompt", "flow_step": "post_sus"}),
                 ]
                 for step_idx, (event_name, metadata) in enumerate(step_events, start=1):
+                    # Skip SUS/feedback events for users who don't submit
+                    if event_name == "sus_submitted" and not submit_sus:
+                        continue
+                    if event_name == "feedback_submitted" and not submit_feedback:
+                        continue
                     if step_idx > stage_max:
                         break
                     ts = day_base + timedelta(minutes=step_idx * (2 + (idx % 3)))
@@ -897,39 +875,48 @@ def _build_phase4a_seed_documents(now_utc: datetime) -> tuple[list[dict[str, Any
                     }
                 )
 
-        responses = _sus_responses_for_target_score(float(profile["sus_target"]), idx)
-        sus_created_at = base_start + timedelta(days=int(day_offsets[min(1, len(day_offsets) - 1)]), hours=13, minutes=idx * 3)
-        sus_docs.append(
-            {
-                "user_id": user_id,
-                "profile_id": DEFAULT_PROFILE_ID,
-                "responses": responses,
-                "sus_score": _calculate_sus_score(responses),
-                "context": "phase4a_seed_live",
-                "created_at": sus_created_at,
-                "created_at_date": sus_created_at.date().isoformat(),
-                "seed_tag": PHASE4A_SEED_TAG,
-            }
-        )
+        # Only create SUS for users who complete funnel (realistic drop-off: 6 of 10)
+        if submit_sus:
+            sus_target = float(profile["sus_target"])
+            responses = _sus_responses_for_target_score(sus_target, idx)
+            sus_created_at = base_start + timedelta(days=int(day_offsets[min(1, len(day_offsets) - 1)]), hours=13, minutes=idx * 3)
+            sus_docs.append(
+                {
+                    "user_id": user_id,
+                    "profile_id": DEFAULT_PROFILE_ID,
+                    "responses": responses,
+                    "sus_score": _calculate_sus_score(responses),
+                    "context": "phase4a_seed_live",
+                    "created_at": sus_created_at,
+                    "created_at_date": sus_created_at.date().isoformat(),
+                    "seed_tag": PHASE4A_SEED_TAG,
+                }
+            )
 
-        feedback_seed = feedback_entries[idx]
-        feedback_created_at = base_start + timedelta(days=int(day_offsets[-1]), hours=17, minutes=idx * 2)
-        feedback_docs.append(
-            {
-                "user_id": user_id,
-                "profile_id": DEFAULT_PROFILE_ID,
-                "useful": feedback_seed["useful"],
-                "confusing": feedback_seed["confusing"],
-                "would_use_again": feedback_seed["would_use_again"],
-                "would_pay": feedback_seed["would_pay"],
-                "top_quote": feedback_seed["top_quote"],
-                "notes": feedback_seed["notes"],
-                "context": "phase4a_seed_live",
-                "created_at": feedback_created_at,
-                "created_at_date": feedback_created_at.date().isoformat(),
-                "seed_tag": PHASE4A_SEED_TAG,
-            }
-        )
+        # Only create feedback for select users (realistic drop-off: 4 quality + 2 noise = 6 total, but only 4 are actionable)
+        if submit_feedback:
+            # Distribute feedback entries: quality feedback for idx 0,1,2,6 → idx 0,2,6 in new setup get entries 0,1,2
+            # and idx 9 gets entry 3 (noise)
+            feedback_idx_map = {0: 0, 2: 1, 6: 2, 9: 3, 3: 4, 5: 5}  # user idx → feedback entry idx
+            feedback_entry_idx = feedback_idx_map.get(idx, idx % len(feedback_entries))
+            feedback_seed = feedback_entries[feedback_entry_idx]
+            feedback_created_at = base_start + timedelta(days=int(day_offsets[-1]), hours=17, minutes=idx * 2)
+            feedback_docs.append(
+                {
+                    "user_id": user_id,
+                    "profile_id": DEFAULT_PROFILE_ID,
+                    "useful": feedback_seed["useful"],
+                    "confusing": feedback_seed["confusing"],
+                    "would_use_again": feedback_seed["would_use_again"],
+                    "would_pay": feedback_seed["would_pay"],
+                    "top_quote": feedback_seed["top_quote"],
+                    "notes": feedback_seed["notes"],
+                    "context": "phase4a_seed_live",
+                    "created_at": feedback_created_at,
+                    "created_at_date": feedback_created_at.date().isoformat(),
+                    "seed_tag": PHASE4A_SEED_TAG,
+                }
+            )
 
     return events, sus_docs, feedback_docs
 
