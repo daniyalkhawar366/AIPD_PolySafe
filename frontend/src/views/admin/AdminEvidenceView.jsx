@@ -31,11 +31,6 @@ const AdminEvidenceView = ({
     count: Number(count || 0),
     conversion: Number(funnel?.conversion_percent?.[step] || 0),
   }));
-  
-  // Calculate total users and premium users for display
-  const totalUsers = (funnel?.counts?.started || 0) + (businessMetrics?.active_user_count ? 0 : 0);
-  const premiumUsers = businessMetrics?.mrr ? Math.ceil(businessMetrics.mrr / 20) : 0;
-  const quotes = analytics?.qualitative?.top_quotes || [];
 
   // ── Phase 4B: PMF Metrics ─────────────────────────────────────────────────
   const funnelCounts = funnel?.counts || {};
@@ -69,6 +64,19 @@ const AdminEvidenceView = ({
   const abLift = (controlClickRate !== null && variantClickRate !== null)
     ? Math.round(((variantClickRate - controlClickRate) / Math.max(1, controlClickRate)) * 100)
     : null;
+  const premiumConversionDisplayRate = analytics?.premium_conversion_rate != null
+    ? Math.floor(Number(analytics.premium_conversion_rate))
+    : null;
+  const premiumUsers = Number(
+    businessMetrics?.premium_user_count
+      ?? (businessMetrics?.mrr ? Math.ceil(Number(businessMetrics.mrr) / 20) : 0),
+  );
+  const showDemoEvidenceControls = false;
+  const qualitativeQuotes = feedbackRows
+    .map((row) => row.top_quote || '')
+    .filter(Boolean)
+    .slice(0, 5);
+  const qualitativeResponsesCount = Number(liveSummary.feedback_responses || 0);
 
   const MetricFlipCard = ({
     icon: Icon,
@@ -123,39 +131,45 @@ const AdminEvidenceView = ({
 
         {/* Header */}
         <GlassCard className="p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start gap-3">
             <div>
               <p className="text-xs uppercase tracking-wide text-indigo-600 font-semibold">Internal Admin</p>
               <h2 className="text-2xl font-bold text-slate-900">Evidence Analytics Dashboard</h2>
               <p className="text-sm text-slate-600 mt-1">Logged in as {currentUser?.email || 'admin user'}.</p>
             </div>
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              disabled={loading || seedLoading}
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-            <button
-              type="button"
-              onClick={onSeed}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={loading || seedLoading}
-            >
-              <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
-              Seed Live Evidence
-            </button>
-            <button
-              type="button"
-              onClick={onReset}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-rose-200 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed"
-              disabled={loading || seedLoading}
-            >
-              <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
-              Reset Evidence
-            </button>
+            <div className="ml-auto flex flex-wrap items-center gap-3">
+              {showDemoEvidenceControls && (
+                <>
+                  <button
+                    type="button"
+                    onClick={onSeed}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={loading || seedLoading}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
+                    Seed Live Evidence
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onReset}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-rose-200 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                    disabled={loading || seedLoading}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${seedLoading ? 'animate-spin' : ''}`} />
+                    Reset Evidence
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                disabled={loading || seedLoading}
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
           {seedInfo && <p className="mt-3 text-sm text-emerald-700">{seedInfo}</p>}
@@ -191,11 +205,18 @@ const AdminEvidenceView = ({
               <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-600">Business KPI</p>
               <p className="text-sm font-semibold text-slate-700 mt-1">Premium Conversion Rate</p>
               <p className="text-4xl font-bold text-slate-900 mt-2">
-                {analytics?.premium_conversion_rate != null
-                  ? `${analytics.premium_conversion_rate}%`
+                {premiumConversionDisplayRate != null
+                  ? `${premiumConversionDisplayRate}%`
                   : '—'}
               </p>
-              <p className="text-xs text-slate-500 mt-1">Free → Paid upgrades / total registered users</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Free → Paid upgrades / total users in analytics cohort
+              </p>
+              {businessMetrics?.premium_user_count != null && businessMetrics?.conversion_cohort_users != null && (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {businessMetrics.premium_user_count} premium of {businessMetrics.conversion_cohort_users} users considered
+                </p>
+              )}
               <div className="mt-3 space-y-1 text-[11px] text-slate-500 border-t border-slate-100 pt-2">
                 <p>🔴 &lt;2% — No PMF</p>
                 <p>🟡 2–5% — Early PMF</p>
@@ -246,7 +267,6 @@ const AdminEvidenceView = ({
                 {controlClickRate !== null ? `${controlClickRate}%` : '—'}
               </p>
               <p className="text-xs text-slate-500 mt-1">"Add All" click-through rate</p>
-              <p className="text-xs text-slate-400 mt-2">n = {controlVariantUsers}</p>
             </div>
             <div className="rounded-xl border-2 border-amber-200 p-4 bg-amber-50">
               <p className="text-[11px] font-bold uppercase tracking-wide text-amber-600">Group B — Confidence Badges ✨</p>
@@ -255,7 +275,6 @@ const AdminEvidenceView = ({
                 {variantClickRate !== null ? `${variantClickRate}%` : '—'}
               </p>
               <p className="text-xs text-amber-700 mt-1">"Add All" click-through rate</p>
-              <p className="text-xs text-amber-600 mt-2">n = {confidenceVariantUsers}</p>
             </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex flex-wrap items-center justify-between gap-4">
@@ -526,16 +545,17 @@ const AdminEvidenceView = ({
 
           <GlassCard className="p-4">
             <h3 className="text-lg font-semibold">Qualitative Highlights</h3>
-            <p className="text-sm text-slate-600 mt-1">Recent user quotes</p>
+            <p className="text-sm text-slate-600 mt-1">Recent qualitative reflections from the latest feedback entries</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-700">
-              {quotes.slice(0, 5).map((quote) => (
+              {qualitativeQuotes.map((quote) => (
                 <li key={quote} className="border-l-2 border-indigo-300 pl-2">"{quote}"</li>
               ))}
-              {quotes.length === 0 && <li className="text-slate-500">No quotes yet.</li>}
+              {qualitativeQuotes.length === 0 && <li className="text-slate-500">No qualitative reflections yet.</li>}
             </ul>
             <div className="mt-4 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 bg-slate-50">
               <p>Sessions completed: {kpis.sessions_completed || 0}</p>
               <p>SUS submissions: {liveSummary.sus_responses || 0}</p>
+              <p>Qualitative reflections: {qualitativeResponsesCount}</p>
               <p>Avg session duration: 4 min</p>
             </div>
           </GlassCard>

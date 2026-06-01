@@ -145,7 +145,7 @@ const AppSidebar = ({
           {showAdmin && (
             <NavItem
               icon={BarChart3}
-              label="Admin Evidence"
+              label="Statistics"
               active={activeView === 'admin'}
               sidebarOpen={sidebarOpen}
               onClick={() => onNavigate('admin')}
