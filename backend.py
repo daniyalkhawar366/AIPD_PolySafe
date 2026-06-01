@@ -123,6 +123,7 @@ if MONGO_URI:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=FRONTEND_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.railway\.app",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
