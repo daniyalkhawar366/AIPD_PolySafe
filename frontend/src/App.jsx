@@ -943,13 +943,11 @@ const App = () => {
         }
         manualLogoutRef.current = false;
       } catch (err) {
-        const shouldClearSession = err?.response?.status === 401 || err?.response?.status === 403;
-        if (shouldClearSession) {
-          localStorage.removeItem(TOKEN_KEY);
-          setAuthHeader('');
-          setToken('');
-          setCurrentUser(null);
-        }
+        // Clear token on auth or connection failure to prevent infinite loading state
+        localStorage.removeItem(TOKEN_KEY);
+        setAuthHeader('');
+        setToken('');
+        setCurrentUser(null);
       } finally {
         setSessionRestorePending(false);
         setAuthHydrated(true);
