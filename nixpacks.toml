@@ -1,0 +1,3 @@
+# Nixpacks configuration for system-level dependencies
+[phases.setup]
+aptPkgs = ["tesseract-ocr", "poppler-utils"]
